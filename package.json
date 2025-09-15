@@ -1,0 +1,24 @@
+{
+  "name": "zoom-api-test",
+  "version": "1.0.0",
+  "description": "Prueba de conectividad con Zoom API",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node main.js",
+    "start": "node main.js",
+    "input": "node modulos/input.js",
+    "test": "node test-zoom.js",
+    "start:zoom": "node test-zoom.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.4.5",
+    "form-data": "^4.0.4",
+    "luxon": "^3.5.0"
+  },
+  "keywords": [
+    "zoom",
+    "api",
+    "test"
+  ]
+}
