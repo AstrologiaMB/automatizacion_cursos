@@ -1,8 +1,10 @@
 // main.js
-// Orquestador: invoca el Módulo INPUT, construye template de curso y (si hay credenciales) crea reunión Zoom
+// Orquestador: invoca el Módulo INPUT, construye template de curso y orquesta integraciones con UX mejorada (spinners)
 
 'use strict';
 
+const ora = require('ora');
+const chalk = require('chalk');
 const logger = require('./utils/logger');
 const { getInputData } = require('./modulos/input');
 const { buildCourseConfig } = require('./templates/course-template');
@@ -25,10 +27,8 @@ function hasZoomCreds(cfg) {
 
 async function main() {
   try {
-    // Modo no interactivo opcional vía variable de entorno (para pruebas/CI)
-    // NON_INTERACTIVE_JSON debe contener el objeto defaults en JSON.
+    // 1. INPUT
     const nonInteractiveJson = process.env.NON_INTERACTIVE_JSON;
-
     const input = await getInputData(
       nonInteractiveJson
         ? { interactive: false, defaults: JSON.parse(nonInteractiveJson) }
@@ -36,18 +36,23 @@ async function main() {
     );
 
     if (!input) {
-      logger.warn('[MAIN] Proceso cancelado por el usuario.');
+      // Usuario canceló en prompts
       return;
     }
 
-    logger.info('[MAIN] Datos INPUT validados. Construyendo configuración base de curso...');
+    console.log(''); // Espacio visual
+    const mainSpinner = ora({ text: 'Iniciando automatización...', color: 'cyan' }).start();
+
+    // 2. CONFIG BASE
+    mainSpinner.text = 'Construyendo configuración base...';
+    await new Promise(r => setTimeout(r, 500)); // Pequeña pausa para que se vea el spinner
     const courseConfig = buildCourseConfig(input);
 
-    // Intentar crear reunión Zoom solo si hay credenciales completas
+    // 3. ZOOM
     const zoomCfg = getZoomConfig();
     let zoomResult = null;
     if (hasZoomCreds(zoomCfg)) {
-      logger.info('[MAIN] Credenciales Zoom detectadas. Creando reunión...');
+      mainSpinner.text = 'Creando reunión en Zoom...';
       try {
         const z = await createMeetingFromInput(input);
         zoomResult = z;
@@ -58,16 +63,19 @@ async function main() {
         if (z.occurrences) {
           courseConfig.integrations.zoom.occurrences = z.occurrences;
         }
-        logger.info('[MAIN] Reunión Zoom creada.');
+        mainSpinner.succeed(chalk.green('Zoom: Reunión creada exitosamente.'));
+        mainSpinner.start(); // Reiniciar para siguiente paso
       } catch (e) {
-        logger.error('[MAIN] Falló la creación de la reunión Zoom:', e && e.message ? e.message : e);
-        // Continuamos sin Zoom para no interrumpir todo el flujo
+        mainSpinner.warn(chalk.yellow(`Zoom: Falló creación (${e.message}). Continuando...`));
+        mainSpinner.start();
       }
     } else {
-      logger.warn('[MAIN] Credenciales Zoom no configuradas (.env). Omitiendo creación de reunión.');
+      mainSpinner.info(chalk.dim('Zoom: Credenciales no configuradas. Omitiendo.'));
+      mainSpinner.start();
     }
 
-    // Generar URLs y tabla TimeAndDate
+    // 4. TIME AND DATE
+    mainSpinner.text = 'Generando horarios y URLs (TimeAndDate)...';
     try {
       const tz = zoomCfg.defaults?.timezone || DEFAULT_TIMEZONE;
       let occsBA;
@@ -88,153 +96,169 @@ async function main() {
       const tableHtml = buildScheduleTableHtml(rows);
       courseConfig.integrations.timeanddate.converterUrls = convUrls;
       courseConfig.integrations.timeanddate.tableHtml = tableHtml;
+
+      mainSpinner.succeed(chalk.green('TimeAndDate: URLs y tabla generadas.'));
+      mainSpinner.start();
     } catch (e) {
-      logger.error('[MAIN] Error generando TimeAndDate:', e && e.message ? e.message : e);
+      mainSpinner.fail(chalk.red(`TimeAndDate: Error (${e.message}).`));
+      mainSpinner.start();
     }
 
-    // Integración FluentCRM: crear etiqueta y lista (ambas = tagCurso) de forma idempotente
-    try {
-      const fcrmCfg = getFcrmConfig();
-      const hasFcrm = Boolean(fcrmCfg.baseUrl && fcrmCfg.user && fcrmCfg.pass);
-      if (hasFcrm) {
-        logger.info('[MAIN] Credenciales FluentCRM detectadas. Creando/Asegurando etiqueta y lista...');
+    // 5. FLUENTCRM
+    const fcrmCfg = getFcrmConfig();
+    if (Boolean(fcrmCfg.baseUrl && fcrmCfg.user && fcrmCfg.pass)) {
+      mainSpinner.text = 'Configurando FluentCRM (Tags/Listas)...';
+      try {
         const code = input.tagCurso;
         if (!code || !String(code).trim()) {
-          logger.warn('[MAIN] tagCurso vacío. Omitiendo FluentCRM.');
+          mainSpinner.warn(chalk.yellow('FluentCRM: tagCurso vacío. Omitiendo.'));
         } else {
           const tagRes = await ensureTagFromCode({ code });
+          // Pequeña pausa para no saturar si es muy rápido
           const listRes = await ensureListFromCode({ code });
           courseConfig.integrations.fluentcrm = {
             code,
             tagId: tagRes?.id || null,
             listId: listRes?.id || null,
           };
-          logger.info('[MAIN] FluentCRM actualizado (tag y lista asegurados).');
+          mainSpinner.succeed(chalk.green('FluentCRM: Tag y Lista asegurados.'));
         }
-      } else {
-        logger.warn('[MAIN] Credenciales FluentCRM no configuradas (.env). Omitiendo FluentCRM.');
+      } catch (e) {
+        mainSpinner.warn(chalk.yellow(`FluentCRM: Error parcial (${e.message}).`));
       }
-    } catch (e) {
-      logger.error('[MAIN] Error en FluentCRM:', e && e.message ? e.message : e);
+    } else {
+      mainSpinner.info(chalk.dim('FluentCRM: Credenciales no configuradas. Omitiendo.'));
     }
+    mainSpinner.start();
 
-    // Integración LearnDash
-    try {
-      const wpCfg = getWpConfig();
-      const hasWp = Boolean(wpCfg.baseUrl && wpCfg.username && wpCfg.appPassword);
-      if (hasWp) {
-        const courseTitle = courseConfig.meta.title;
-        const defaultSlug = courseConfig.meta.slug;
-        const desc = courseConfig.meta.description;
+    // 6. Configurar LEARNDASH (Curso y Lección)
+    const wpCfg = getWpConfig();
+    const ldKey = process.env.WP_USER;
+    if (Boolean(wpCfg.baseUrl && ldKey)) {
+      mainSpinner.text = 'LearnDash: Creando/Actualizando curso base...';
+      try {
+        const { createOrUpdateCourse, ensureLesson1, ensureLessonAssignedToCourse, getCourseByTag, buildLesson1Content } = require('./services/learndash');
 
-        // Rama: usar curso ya clonado por tag (minimiza riesgo; el usuario clonó manualmente)
-        if (input.useExistingClonedCourse && input.existingTag) {
-          const existingSlug = String(input.existingTag).toLowerCase();
-          logger.info(`[MAIN] Usando curso clonado existente por tag="${existingSlug}".`);
-          const { courseId } = await ensureExistingCourseByTag({ tagOrSlug: existingSlug });
+        // 1. Buscar curso molde (Auto-Cloning)
+        let sourceCourseData = null;
+        if (input.sourceTag) {
+          mainSpinner.text = `LearnDash: Buscando curso MOLDE con tag "${input.sourceTag}"...`;
+          const source = await getCourseByTag({ client: require('./services/learndash').getWpClient(), tag: input.sourceTag });
+          if (source) {
+            sourceCourseData = source;
+            logger.info(`[LD] Curso molde encontrado: "${source.title.rendered}" (ID: ${source.id})`);
+          } else {
+            logger.warn(chalk.yellow(`[LD] No se encontró ningún curso molde con el tag "${input.sourceTag}". Se creará desde cero.`));
+          }
+        }
 
-          // Renombrar el curso clonado: "Copy of ..." -> nuevo título, y normalizar slug al tag
+        mainSpinner.text = 'LearnDash: Procesando curso...';
+
+        // 2. Crear o Actualizar Curso
+        const courseEnsure = await createOrUpdateCourse({
+          client: require('./services/learndash').getWpClient(),
+          title: input.nombreBase, // Internal Name
+          slug: input.tagCurso, // User requested Tag as Slug
+          content: 'Contenido generado automáticamente.', // Fallback content
+          imagePath: input.rutaImagen,
+          existingCourse: null, // We let the service find by slug/title
+          sourceCourseData // PASS THE CLONE DATA
+        });
+
+        courseConfig.integrations.learndash.courseId = courseEnsure.courseId;
+        const msgMode = courseEnsure.wasCreated ? 'creado' : 'actualizado';
+        mainSpinner.succeed(chalk.green(`LearnDash: Curso base ${msgMode} (ID ${courseEnsure.courseId}).`));
+        if (sourceCourseData) {
+          logger.info(chalk.cyan(`ℹ️  Curso clonado a partir de: ${sourceCourseData.title.rendered}`));
+        }
+
+        // 3. Crear Lección Zoom
+        mainSpinner.start('LearnDash: Creando lección Zoom...');
+        const contentHtml = buildLesson1Content(input, courseConfig);
+        const lessonTitle = `Datos del Encuentro (Zoom) — ${input.nombreBase}`; // Use input name cleanly
+
+        const lessonEnsure = await ensureLesson1({
+          courseId: courseEnsure.courseId,
+          title: lessonTitle,
+          contentHtml,
+          courseSlug: courseConfig.meta.slug, // Might be undefined before fetch? Service handles it.
+          courseConfig,
+          input,
+          zoomResult
+        });
+
+        courseConfig.integrations.learndash.lessonIds = [lessonEnsure.lessonId];
+
+        // 4. Asignar Lección (si no usamos el plugin de automatización implícito)
+        if (String(process.env.USE_LD_PLUGIN || '').toLowerCase() !== 'true') {
           try {
-            await renameCourseTitle({ courseId, newTitle: courseTitle, newSlug: existingSlug });
-          } catch (eRename) {
-            logger.warn('[MAIN] No se pudo renombrar el curso clonado:', eRename && eRename.message ? eRename.message : eRename);
-          }
-
-          // Generar/actualizar Lección Zoom en el curso clonado (slug determinístico basado en existingTag)
-          const contentHtml = buildLesson1Content(input, courseConfig);
-          const lessonTitle = `Datos del Encuentro (Zoom) — ${courseTitle}`;
-          const lessonEnsure = await ensureLesson1({
-            courseId,
-            title: lessonTitle,
-            contentHtml,
-            courseSlug: existingSlug,
-          });
-
-          courseConfig.integrations.learndash.courseId = courseId;
-          courseConfig.integrations.learndash.lessonIds = [lessonEnsure.lessonId];
-
-          // Enforce course_price_type = closed (idempotente)
-          await enforceCourseClosed({ courseId });
-
-          logger.info('[MAIN] LearnDash actualizado (curso clonado existente + lección Zoom).');
-        } else {
-          // Rama original: crear/actualizar curso y Lección 1
-          logger.info('[MAIN] Credenciales WordPress detectadas. Creando/actualizando curso y lección en LearnDash...');
-          const courseEnsure = await ensureCourse({
-            title: courseTitle,
-            slug: defaultSlug,
-            existingCourseFlag: courseConfig.meta.existingCourse,
-            description: desc,
-          });
-
-          const contentHtml = buildLesson1Content(input, courseConfig);
-          const lessonTitle = `Datos del Encuentro (Zoom) — ${courseTitle}`;
-
-          const lessonEnsure = await ensureLesson1({
-            courseId: courseEnsure.courseId,
-            title: lessonTitle,
-            contentHtml,
-            courseSlug: defaultSlug,
-          });
-
-          courseConfig.integrations.learndash.courseId = courseEnsure.courseId;
-          courseConfig.integrations.learndash.lessonIds = [lessonEnsure.lessonId];
-
-          // Refuerzo: asegurar que la lección quede asignada como step del curso (idempotente)
-          // Si USE_LD_PLUGIN=true, ya se intentó primero vía plugin y evitamos reintentos innecesarios.
-          if (String(process.env.USE_LD_PLUGIN || '').toLowerCase() !== 'true') {
-            try {
-              await ensureLessonAssignedToCourse({
-                courseId: courseEnsure.courseId,
-                lessonId: lessonEnsure.lessonId,
-              });
-            } catch (e2) {
-              logger.warn('[MAIN] No se pudo asignar lección al curso (Course Steps):', e2 && e2.message ? e2.message : e2);
-            }
-          }
-
-          logger.info('[MAIN] LearnDash actualizado.');
+            await ensureLessonAssignedToCourse({
+              courseId: courseEnsure.courseId,
+              lessonId: lessonEnsure.lessonId,
+            });
+          } catch (e2) { }
         }
-      } else {
-        logger.warn('[MAIN] Credenciales WordPress no configuradas (.env). Omitiendo LearnDash.');
+
+        mainSpinner.succeed(chalk.green('LearnDash: Lección de Zoom creada y asignada.'));
+
+      } catch (e) {
+        mainSpinner.fail(chalk.red(`LearnDash: Error crítico (${e.message}).`));
       }
-    } catch (e) {
-      logger.error('[MAIN] Error en LearnDash:', e && e.message ? e.message : e);
+    } else {
+      mainSpinner.info(chalk.dim('LearnDash: Credenciales no configuradas. Omitiendo.'));
+    }
+    mainSpinner.start();
+
+    // 7. WOOCOMMERCE
+    const wpCfg2 = getWpConfig();
+    const wcKey = process.env.WC_CONSUMER_KEY;
+    const wcSecret = process.env.WC_CONSUMER_SECRET;
+    if (Boolean(wpCfg2.baseUrl && wcKey && wcSecret)) {
+      mainSpinner.text = 'Actualizando WooCommerce...';
+      try {
+        const wcRes = await updateWooProductByInput({
+          input,
+          courseId: courseConfig.integrations.learndash.courseId
+        });
+        if (wcRes && wcRes.productId) {
+          courseConfig.integrations.woocommerce.productId = wcRes.productId;
+        }
+        const mode = wcRes && wcRes.dryRun ? 'DRY-RUN' : 'LIVE';
+        mainSpinner.succeed(chalk.green(`WooCommerce: Producto actualizado (${mode}).`));
+      } catch (eWc) {
+        mainSpinner.warn(chalk.yellow(`WooCommerce: Falló actualización (${eWc.message}).`));
+      }
+    } else {
+      mainSpinner.info(chalk.dim('WooCommerce: Credenciales no configuradas. Omitiendo.'));
     }
 
-    // Integración WooCommerce
-    try {
-      const wpCfg2 = getWpConfig();
-      const wcKey = process.env.WC_CONSUMER_KEY;
-      const wcSecret = process.env.WC_CONSUMER_SECRET;
-      const hasWc = Boolean(wpCfg2.baseUrl && wcKey && wcSecret);
-      if (hasWc) {
-        logger.info('[MAIN] Credenciales WooCommerce detectadas. Actualizando producto...');
-        try {
-          const wcRes = await updateWooProductByInput({ input });
-          if (wcRes && wcRes.productId) {
-            courseConfig.integrations.woocommerce.productId = wcRes.productId;
-          }
-          const mode = wcRes && wcRes.dryRun ? 'DRY-RUN' : 'LIVE';
-          logger.info(`[MAIN] WooCommerce ${mode} completado. Cambios: ${wcRes && wcRes.changed ? 'sí' : 'no'}.`);
-        } catch (eWc) {
-          logger.error('[MAIN] WooCommerce abortado:', eWc && eWc.message ? eWc.message : eWc);
-        }
-      } else {
-        logger.warn('[MAIN] Credenciales WooCommerce no configuradas (.env). Omitiendo WooCommerce.');
-      }
-    } catch (e) {
-      logger.error('[MAIN] Error en WooCommerce:', e && e.message ? e.message : e);
+    mainSpinner.stop(); // Detener spinner para mostrar resumen final
+
+    // RESUMEN FINAL
+    console.log('');
+    console.log(chalk.bold.inverse(' RESUMEN FINAL DE AUTOMATIZACIÓN '));
+    console.log('');
+
+    // Tabla simple manual
+    const logRow = (label, val) => console.log(chalk.cyan(label.padEnd(20)) + ': ' + val);
+
+    logRow('Curso', input.nombreBase);
+    logRow('Tag', input.tagCurso);
+    logRow('Zoom ID', courseConfig.integrations.zoom.meetingId || chalk.red('No creado'));
+    logRow('Join URL', courseConfig.integrations.zoom.joinUrl || '-');
+    logRow('FluentCRM Tag ID', courseConfig.integrations.fluentcrm.tagId || '-');
+    logRow('LearnDash Curso ID', courseConfig.integrations.learndash.courseId || '-');
+
+    if (courseConfig.integrations.timeanddate.converterUrls && courseConfig.integrations.timeanddate.converterUrls[0]) {
+      logRow('Time&Date URL', courseConfig.integrations.timeanddate.converterUrls[0]);
     }
 
-    logger.info('[MAIN] Resultado final.');
-    // eslint-disable-next-line no-console
-    console.log(JSON.stringify({
-      input,
-      courseConfig,
-    }, null, 2));
+    console.log('');
+    console.log(chalk.green('✅ Proceso finalizado.'));
+
   } catch (err) {
-    logger.error('[MAIN] Error:', err && err.stack ? err.stack : (err && err.message) || err);
+    if (typeof mainSpinner !== 'undefined') mainSpinner.stop();
+    logger.error('Error fatal en main:', err);
     process.exit(1);
   }
 }

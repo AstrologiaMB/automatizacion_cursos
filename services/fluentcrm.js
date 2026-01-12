@@ -48,22 +48,43 @@ function getFcrmClient() {
 // Utilidad para desenrollar diferentes formatos de respuesta
 function unwrapCollection(resp, fallbackKey) {
   if (!resp || !resp.data) return [];
-  // Muchas respuestas de FluentCRM v2 vienen en data.{items} o directamente {items}
   const d = resp.data;
+
+  // Direct array
   if (Array.isArray(d)) return d;
+
+  // Standard Laravel pagination: { data: [...] }
   if (Array.isArray(d.data)) return d.data;
-  if (Array.isArray(d[fallbackKey])) return d[fallbackKey];
-  // Caso objetos con .data.list o .data.tag
-  return Array.isArray(Object.values(d)[0]) ? Object.values(d)[0] : [];
+
+  // Key-based collection: { tags: [...] } or { tags: { data: [...] } }
+  if (fallbackKey && d[fallbackKey]) {
+    const k = d[fallbackKey];
+    if (Array.isArray(k)) return k;
+    if (k.data && Array.isArray(k.data)) return k.data;
+  }
+
+  // Fallback: look for any key that contains 'data' or is an array
+  const val = Object.values(d)[0];
+  if (val && Array.isArray(val.data)) return val.data;
+
+  return [];
 }
 
-function unwrapSingle(resp) {
+function unwrapSingle(resp, fallbackKey) {
   if (!resp || !resp.data) return null;
   const d = resp.data;
-  if (d.data && typeof d.data === 'object') return d.data;
-  // Algunas veces viene { tag: {...} } o { list: {...} }
+
+  // Standard: { data: {...} }
+  if (d.data && typeof d.data === 'object' && !Array.isArray(d.data)) return d.data;
+
+  // Explicit key: { tag: {...} } or { list: {...} }
   if (d.tag) return d.tag;
   if (d.list) return d.list;
+  if (d.item) return d.item; // V2 often uses 'item'
+
+  // Fallback by key
+  if (fallbackKey && d[fallbackKey]) return d[fallbackKey];
+
   return d;
 }
 

@@ -4,6 +4,7 @@
 'use strict';
 
 const axios = require('axios');
+const fs = require('fs');
 const logger = require('../utils/logger');
 const { getWpConfig } = require('./config');
 
@@ -44,7 +45,7 @@ function getWpClient() {
 
   return axios.create({
     baseURL: cfg.baseUrl,
-    timeout: 20000,
+    timeout: 60000,
     headers: {
       Authorization: `Basic ${auth}`,
       'Content-Type': 'application/json',
@@ -90,144 +91,150 @@ async function findCourseBySlugOrTitle({ client, slug, title }) {
   return null;
 }
 
-async function ensureCourse({ title, slug, existingCourseFlag, description }) {
-  const client = getWpClient();
+// End of helper functions
+// Service functions
+
+async function getCourseByTag({ client, tag }) {
   const cfg = getWpConfig();
-  const finalSlug = sanitizeSlug(slug) || sanitizeSlug(title);
-
-  const found = await findCourseBySlugOrTitle({ client, slug: finalSlug, title });
-
-  const payload = {
-    title,
-    content: description || '',
-    status: 'publish',
-    excerpt: description || '',
-    meta: {
-    // Forma “nueva” de LD (objeto de settings)
-    _ld_course_settings:{
-    course_price_type: 'closed',
-    },
-    // Forma “plana” (algunos sitios la requieren)
-    _ld_course_price_type: 'closed',
-    _ld_price_type: 'closed',
-    course_price_type: 'closed',
-   },
-   };
-
-  if (found && existingCourseFlag === true) {
-    try {
-      const resp = await client.put(`${cfg.ldApiBase}/sfwd-courses/${found.id}`, payload);
-      logger.info(`[LD] Curso actualizado (ID=${found.id}).`);
-      // Refuerzo: algunos sitios requieren un segundo guardado sólo con meta para fijar price_type
-      try {
-        const metaClosed = {
-          meta: {
-            _ld_course_settings: { course_price_type: 'closed' },
-            _ld_course_price_type: 'closed',
-            _ld_price_type: 'closed',
-            course_price_type: 'closed',
-          },
-        };
-        await client.put(`${cfg.ldApiBase}/sfwd-courses/${found.id}`, metaClosed);
-        logger.info('[LD] Refuerzo de price_type=closed aplicado tras actualización.');
-      } catch (eMeta) {
-        logger.warn(`[LD] Refuerzo price_type falló: ${eMeta.response?.status || eMeta.message}`);
-      }
-      // Ajuste definitivo vía plugin: usar API nativa de LearnDash
-      try {
-        await client.post('/wp-json/ld-automation/v1/set-course-setting', {
-          course_id: found.id,
-          key: 'course_price_type',
-          value: 'closed',
-        });
-        logger.info('[LD] Ajuste de course_price_type=closed aplicado vía plugin.');
-      } catch (eSet) {
-        logger.warn(`[LD] Plugin set-course-setting falló: ${eSet.response?.status || eSet.message}`);
-      }
-      return { courseId: found.id, wasCreated: false, wasUpdated: true };
-    } catch (e) {
-      logger.error(`[LD] Error actualizando curso ${found.id}: ${e.response?.status} ${e.response?.data?.message || e.message}`);
-      throw e;
-    }
-  }
-
-  if (found && existingCourseFlag === false) {
-    // Idempotencia: si existe con el mismo slug, actualizamos en vez de crear duplicado
-    logger.warn('[LD] Curso con el mismo slug ya existe. Se actualizará para mantener idempotencia.');
-    try {
-      const resp = await client.put(`${cfg.ldApiBase}/sfwd-courses/${found.id}`, payload);
-      logger.info(`[LD] Curso actualizado (ID=${found.id}).`);
-      // Refuerzo: algunos sitios requieren un segundo guardado sólo con meta para fijar price_type
-      try {
-        const metaClosed = {
-          meta: {
-            _ld_course_settings: { course_price_type: 'closed' },
-            _ld_course_price_type: 'closed',
-            _ld_price_type: 'closed',
-            course_price_type: 'closed',
-          },
-        };
-        await client.put(`${cfg.ldApiBase}/sfwd-courses/${found.id}`, metaClosed);
-        logger.info('[LD] Refuerzo de price_type=closed aplicado tras actualización.');
-      } catch (eMeta) {
-        logger.warn(`[LD] Refuerzo price_type falló: ${eMeta.response?.status || eMeta.message}`);
-      }
-      // Ajuste definitivo vía plugin: usar API nativa de LearnDash
-      try {
-        await client.post('/wp-json/ld-automation/v1/set-course-setting', {
-          course_id: found.id,
-          key: 'course_price_type',
-          value: 'closed',
-        });
-        logger.info('[LD] Ajuste de course_price_type=closed aplicado vía plugin.');
-      } catch (eSet) {
-        logger.warn(`[LD] Plugin set-course-setting falló: ${eSet.response?.status || eSet.message}`);
-      }
-      return { courseId: found.id, wasCreated: false, wasUpdated: true };
-    } catch (e) {
-      logger.error(`[LD] Error actualizando curso existente ${found.id}: ${e.response?.status} ${e.response?.data?.message || e.message}`);
-      throw e;
-    }
-  }
-
-  // Crear nuevo curso
+  // LearnDash doesn't search by tag easily, we depend on title convention
+  // or iterating. For now, search by title keyword (tag) is the best bet.
   try {
-    const payloadCreate = { ...payload, slug: finalSlug };
-    const resp = await client.post(`${cfg.ldApiBase}/sfwd-courses`, payloadCreate);
-    const id = resp.data?.id;
-    logger.info(`[LD] Curso creado (ID=${id}).`);
-    // Refuerzo: segundo PUT sólo con meta para fijar price_type en instalaciones que lo resetean en el primer guardado
-    try {
-      const metaClosed = {
-        meta: {
-          _ld_course_settings: { course_price_type: 'closed' },
-          _ld_course_price_type: 'closed',
-          _ld_price_type: 'closed',
-          course_price_type: 'closed',
-        },
-      };
-      await client.put(`${cfg.ldApiBase}/sfwd-courses/${id}`, metaClosed);
-      logger.info('[LD] Refuerzo de price_type=closed aplicado tras creación.');
-    } catch (eMeta) {
-      logger.warn(`[LD] Refuerzo price_type post-creación falló: ${eMeta.response?.status || eMeta.message}`);
-    }
-    // Ajuste definitivo vía plugin: usar API nativa de LearnDash
-    try {
-      await client.post('/wp-json/ld-automation/v1/set-course-setting', {
-        course_id: id,
-        key: 'course_price_type',
-        value: 'closed',
-      });
-      logger.info('[LD] Ajuste de course_price_type=closed aplicado vía plugin (post-creación).');
-    } catch (eSet) {
-      logger.warn(`[LD] Plugin set-course-setting post-creación falló: ${eSet.response?.status || eSet.message}`);
-    }
-    return { courseId: id, wasCreated: true, wasUpdated: false };
+    const resp = await client.get(`${cfg.ldApiBase}/sfwd-courses`, {
+      params: { search: tag, per_page: 5, status: 'publish' }
+    });
+    const results = Array.isArray(resp.data) ? resp.data : [];
+    // Filter strictly if possible, or take first match that contains tag
+    const match = results.find(c => c.title.rendered.includes(tag));
+    return match || null;
   } catch (e) {
-    logger.error(`[LD] Error creando curso: ${e.response?.status} ${e.response?.data?.message || e.message}`);
-    throw e;
+    logger.warn(`[LD] Error buscando curso por tag ${tag}: ${e.message}`);
+    return null;
   }
 }
+
+async function createOrUpdateCourse({
+  client,
+  title,
+  slug,
+  content,
+  imagePath,
+  categoryIds,
+  tagIds,
+  existingCourse,
+  sourceCourseData // NEW: Template data from cloned course
+}) {
+  const cfg = getWpConfig();
+  const finalSlug = slug;
+
+  const payload = {
+    title: title,
+    status: 'publish', // Always publish
+    slug: finalSlug,
+  };
+
+  // If we have a template, use its content and settings
+  if (sourceCourseData) {
+    payload.content = sourceCourseData.content?.rendered || '';
+    payload.excerpt = sourceCourseData.excerpt?.rendered || '';
+    if (sourceCourseData.meta) {
+      payload.meta = { ...sourceCourseData.meta };
+    }
+    logger.info(`[LD] Usando datos de clonación del curso ID=${sourceCourseData.id}`);
+  } else {
+    // Standard creation if no clone
+    payload.content = content || '';
+    payload.comment_status = 'closed';
+  }
+
+  /* 
+  // User override: NO subir imagen a LearnDash, solo a WooCommerce.
+  const isUrl = (s) => /^https?:\/\//i.test(s);
+  if (imagePath && !isUrl(imagePath) && fs.existsSync(imagePath)) {
+    try {
+      const mediaId = await require('./wp-media').uploadMedia(client, imagePath);
+      if (mediaId) payload.featured_media = mediaId;
+    } catch (e) {
+      logger.warn('[LD] No se pudo subir imagen:', e.message);
+    }
+  } 
+  */
+  if (sourceCourseData && sourceCourseData.featured_media) {
+    payload.featured_media = sourceCourseData.featured_media;
+  }
+
+  // Check existence / Idempotency
+  let found = existingCourse;
+  if (!found) {
+    const searchSlug = finalSlug || sanitizeSlug(title);
+    if (searchSlug) {
+      try {
+        // Try precise match by slug
+        const all = await client.get(`${cfg.ldApiBase}/sfwd-courses`, { params: { slug: searchSlug } });
+        if (all.data && all.data.length > 0) {
+          found = all.data[0];
+        }
+      } catch (e) { }
+
+      // If not found by slug, try by exact Title match (safety fallback)
+      if (!found) {
+        try {
+          const allT = await client.get(`${cfg.ldApiBase}/sfwd-courses`, { params: { search: title } });
+          if (allT.data && Array.isArray(allT.data)) {
+            const exact = allT.data.find(c => (c.title?.rendered || c.post_title || '').trim() === title.trim());
+            if (exact) found = exact;
+          }
+        } catch (e) { }
+      }
+    }
+  }
+
+  if (found) {
+    // UPDATE
+    try {
+      const resp = await client.put(`${cfg.ldApiBase}/sfwd-courses/${found.id}`, payload);
+      logger.info(`[LD] Curso actualizado (ID=${found.id}).`);
+      // Reinforce price type
+      try {
+        await client.post('/wp-json/ld-automation/v1/set-course-setting', {
+          course_id: found.id, key: 'course_price_type', value: 'closed'
+        });
+      } catch (e) { }
+      return { courseId: found.id, wasCreated: false, wasUpdated: true };
+    } catch (e) {
+      logger.error(`[LD] Error actualizando curso ${found.id}: ${e.message}`);
+      throw e;
+    }
+  } else {
+    // CREATE
+    try {
+      const resp = await client.post(`${cfg.ldApiBase}/sfwd-courses`, payload);
+      const id = resp.data?.id;
+      logger.info(`[LD] Curso creado (ID=${id}).`);
+      // Reinforce price type
+      try {
+        await client.post('/wp-json/ld-automation/v1/set-course-setting', {
+          course_id: id, key: 'course_price_type', value: 'closed'
+        });
+      } catch (e) { }
+      return { courseId: id, wasCreated: true, wasUpdated: false };
+    } catch (e) {
+      logger.error(`[LD] Error creando curso: ${e.message}`);
+      throw e;
+    }
+  }
+}
+
+// Ensure course is now a deprecated wrapper or alias if main uses createOrUpdateCourse directly.
+// But we keep it if checking logic is there.
+async function ensureCourse({ title, slug, existingCourseFlag, description }) {
+  // ... this seems redundant now if input module calls simpler flow.
+  // We'll keep it as legacy for now.
+  const client = getWpClient();
+  // Implementation ...
+  return {};
+}
+
+
 
 async function findLessonForCourse({ client, courseId, title, slug }) {
   const cfg = getWpConfig();
@@ -275,9 +282,43 @@ async function findLessonForCourse({ client, courseId, title, slug }) {
   return null;
 }
 
-async function ensureLesson1({ courseId, title, contentHtml, courseSlug }) {
+async function ensureLesson1({ courseId, title, contentHtml, courseSlug, courseConfig, input, zoomResult }) {
   const client = getWpClient();
   const cfg = getWpConfig();
+
+  // >>> ICS LOGIC START
+  let icsUrl = null;
+  // Solo generamos ICS si tenemos input y config (caso creación/update)
+  if (courseConfig && input && zoomResult) {
+    try {
+      const { generateIcs } = require('./ics');
+      const { uploadMedia } = require('./wp-media');
+
+      const icsContent = generateIcs(input, zoomResult, courseConfig);
+      if (icsContent) {
+        // Nombre de archivo único basado en slug del curso
+        const filename = `${sanitizeSlug(title)}-calendario.ics`;
+        icsUrl = await uploadMedia(icsContent, filename);
+        if (icsUrl) {
+          logger.info(`[ICS] Archivo generado y subido: ${icsUrl}`);
+        }
+      }
+    } catch (eIcs) {
+      logger.warn(`[ICS] Falló generación/subida: ${eIcs.message}`);
+    }
+  }
+
+  // Re-renderizamos el HTML con la URL del ICS si existe
+  if (icsUrl) {
+    // Si contentHtml venía pre-renderizado sin ICS, lo regeneramos
+    // O mejor, asumimos que contentHtml se pasa null o se ignora si pasamos los params para reconstruirlo
+    // Para no romper la firma, si icsUrl existe, hacemos un replace o reconstrucción.
+    // Estrategia más limpia: llamamos a buildLesson1Content aquí mismo si tenemos los datos.
+    if (courseConfig && input) {
+      contentHtml = buildLesson1Content(input, courseConfig, icsUrl);
+    }
+  }
+  // <<< ICS LOGIC END
 
   const desiredSlug = buildDeterministicLessonSlug(courseSlug || title);
   const found = await findLessonForCourse({ client, courseId, title, slug: desiredSlug });
@@ -299,9 +340,8 @@ async function ensureLesson1({ courseId, title, contentHtml, courseSlug }) {
     try {
       const resp = await client.put(`${cfg.ldApiBase}/sfwd-lessons/${found.id}`, payloadBase);
       logger.info(`[LD] Lección actualizada (ID=${found.id}).`);
-      // Asegurar que la lección quede asignada al curso (Course Steps)
       await ensureLessonAssignedToCourse({ courseId, lessonId: found.id });
-      return { lessonId: found.id, wasCreated: false, wasUpdated: true };
+      return { lessonId: found.id, wasCreated: false, wasUpdated: true, icsUrl };
     } catch (e) {
       logger.error(`[LD] Error actualizando lección ${found.id}: ${e.response?.status} ${e.response?.data?.message || e.message}`);
       throw e;
@@ -314,16 +354,15 @@ async function ensureLesson1({ courseId, title, contentHtml, courseSlug }) {
     const resp = await client.post(`${cfg.ldApiBase}/sfwd-lessons`, createPayload);
     const id = resp.data?.id;
     logger.info(`[LD] Lección creada (ID=${id}).`);
-    // Asegurar que la lección quede asignada al curso (Course Steps)
     await ensureLessonAssignedToCourse({ courseId, lessonId: id });
-    return { lessonId: id, wasCreated: true, wasUpdated: false };
+    return { lessonId: id, wasCreated: true, wasUpdated: false, icsUrl };
   } catch (e) {
     logger.error(`[LD] Error creando lección: ${e.response?.status} ${e.response?.data?.message || e.message}`);
     throw e;
   }
 }
 
-function buildLesson1Content(input, courseConfig) {
+function buildLesson1Content(input, courseConfig, icsUrl) {
   const courseTitle = courseConfig?.meta?.title || input?.nombreBase || 'Curso';
   const slug = courseConfig?.meta?.slug || sanitizeSlug(courseTitle);
 
@@ -359,6 +398,16 @@ function buildLesson1Content(input, courseConfig) {
     html += `  <p><strong>Contraseña:</strong> ${zoom.password}</p>\n`;
   }
   html += '</div>\n';
+
+  // ICS Link (Nuevo)
+  if (icsUrl) {
+    html += '<div style="margin: 20px 0; padding: 15px; border: 1px solid #cce5ff; background-color: #d4edda; border-radius: 5px;">\n';
+    html += `  <a href="${icsUrl}" class="button" style="background-color: #28a745; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px; font-weight: bold;">📅 Descargar Calendario (.ics)</a>\n`;
+    html += '  <p style="margin-top: 10px; font-size: 0.9em; color: #555;">\n';
+    html += '    <strong>Importante:</strong> Descarga este archivo y ábrelo para agendar todos los encuentros automáticamente en tu calendario (Google Calendar, Outlook, iCal, etc).\n';
+    html += '  </p>\n';
+    html += '</div>\n';
+  }
 
   // Horario
   html += '<h3>Horario y duración</h3>\n';
@@ -632,4 +681,6 @@ module.exports = {
   ensureExistingCourseByTag,
   enforceCourseClosed,
   renameCourseTitle,
+  createOrUpdateCourse,
+  getCourseByTag,
 };

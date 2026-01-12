@@ -455,8 +455,75 @@ function isDryRun() {
   return String(process.env.DRY_RUN_WC || 'true').toLowerCase() === 'true';
 }
 
-async function updateWooProductByInput({ input }) {
+async function enforceFluentCrmTags({ overrides, newTagCode }) {
+  // Strategy: Enforce [P$, newTag] for purchase logic.
+  // We cannot rely on reading existing hidden meta, so we reconstruction the desired state.
+  // Requirement: "Importante los tags P$ y ninguna deben permanecer" -> We ensure P$ is always there.
+
+  const fcrmClient = getFcrmClient();
+
+  // 1. Resolve IDs
+  const pTag = await ensureTagFromCode({ code: 'p$' }).catch(() => null);
+  const newTag = await ensureTagFromCode({ code: newTagCode }).catch(() => null);
+
+  if (!pTag || !newTag) {
+    logger.warn('[WC] No se pudieron resolver IDs para tags P$ o Nuevo Tag. Omitiendo actualización FluentCRM.');
+    return [];
+  }
+
+  const pId = pTag.id;
+  const nId = newTag.id;
+
+  // 2. Construct payloads
+  // Keys for FluentCRM integration (based on common behavior and user request)
+  // Usually: _fluentcrm_purchase_tags (Add), _fluentcrm_purchase_remove_tags (Remove)
+  //          _fluentcrm_refund_tags (Add), _fluentcrm_refund_remove_tags (Remove)
+
+  // Purchase Add: P$ + NewTag
+  const purchaseAddValue = [pId, nId];
+
+  // Purchase Remove: Empty (user said "ninguna" - meaning no specific removals, or just clearing old logic)
+  // Actually, setting this to empty ensures we don't accidentally remove P$ if it was there.
+  const purchaseRemoveValue = [];
+
+  // Refund Add: Empty
+  const refundAddValue = [];
+
+  // Refund Remove: NewTag (so if refunded, access is removed)
+  const refundRemoveValue = [nId];
+
+  // We target specific known keys. If they don't exist, WC will add them.
+  const metas = [
+    { key: '_fluentcrm_purchase_tags', value: purchaseAddValue },
+    { key: '_fluentcrm_purchase_remove_tags', value: purchaseRemoveValue },
+    { key: '_fluentcrm_refund_tags', value: refundAddValue },
+    { key: '_fluentcrm_refund_remove_tags', value: refundRemoveValue }
+  ];
+
+  // CRITICAL FIX: The UI seems to read from 'fcrm-settings-woo', so we must update that too.
+  // Format: { "purchase_apply_tags": ["123"], "purchase_remove_tags": [] } (IDs as strings usually, but numbers work in JSON)
+  const fcrmSettingsValue = {
+    purchase_apply_tags: purchaseAddValue.map(String),
+    purchase_remove_tags: purchaseRemoveValue.map(String),
+    refund_apply_tags: refundAddValue.map(String),
+    refund_remove_tags: refundRemoveValue.map(String)
+  };
+  metas.push({ key: 'fcrm-settings-woo', value: fcrmSettingsValue });
+
+  const diffs = [];
+  // For logging only - meaningful diffs
+  diffs.push({ scope: 'FluentCRM', field: 'PurchaseAdd', before: '(hidden)', after: JSON.stringify(purchaseAddValue) });
+  diffs.push({ scope: 'FluentCRM', field: 'LegacyUI', before: '(hidden)', after: JSON.stringify(fcrmSettingsValue) });
+
+  return { metas, diffs };
+}
+
+async function updateWooProductByInput({ input, courseId }) {
   const wcClient = buildWcAxios();
+
+  if (courseId) {
+    logger.info(`[WC] Recibido courseId para asociación: ${courseId} (Tipo: ${typeof courseId})`);
+  }
 
   // Identify product by SKU candidates
   const candidates = computeSkuCandidates(input.tagCurso);
@@ -478,15 +545,35 @@ async function updateWooProductByInput({ input }) {
 
   const imagePatch = await maybeBuildImagePatch({ product, rutaImagen: input.rutaImagen });
 
-  // FluentCRM meta patches
-  const { metaPatches, diffs: metaDiffs } = await buildPatchForFluentCrm({
-    metaData: product.meta_data || [],
+  // FluentCRM enforced logic
+  const { metas: fcrmMetas, diffs: fcrmDiffs } = await enforceFluentCrmTags({
+    overrides: {}, // unused for now
     newTagCode: String(input.tagCurso || '').toUpperCase(),
   });
+
+  // LearnDash Course Association logic
+  let ldMeta = null;
+  let ldDiff = null;
+  if (courseId) {
+    // Key: _related_course
+    // Value: Array of IDs (e.g., [123]). We enforce Number.
+    const targetIdNum = Number(courseId);
+
+    const currentLd = product.meta_data.find(m => m.key === '_related_course');
+    const currentVal = currentLd ? currentLd.value : [];
+    // safe check: depends on if API returns it as array or string. Usually array for this key.
+    const currentId = (Array.isArray(currentVal) && currentVal.length) ? currentVal[0] : null;
+
+    if (String(currentId) !== String(targetIdNum)) {
+      ldMeta = { key: '_related_course', value: [targetIdNum] };
+      ldDiff = { scope: 'LearnDash', before: String(currentId), after: String(targetIdNum) };
+    }
+  }
 
   // Build Woo patch
   const patch = {};
   const diffs = [];
+  const meta_data = [];
 
   if (nameDiff) {
     patch.name = desiredName;
@@ -498,13 +585,23 @@ async function updateWooProductByInput({ input }) {
       diffs.push({ scope: 'image', before: imagePatch.diff.before, after: imagePatch.diff.after });
     }
   }
-  if (metaPatches.length) {
-    patch.meta_data = metaPatches;
-    diffs.push(...metaDiffs);
+
+  // Accumulate metas
+  if (fcrmMetas.length) {
+    meta_data.push(...fcrmMetas);
+    diffs.push(...fcrmDiffs);
+  }
+  if (ldMeta) {
+    meta_data.push(ldMeta);
+    diffs.push(ldDiff);
+  }
+
+  if (meta_data.length) {
+    patch.meta_data = meta_data;
   }
 
   if (!Object.keys(patch).length) {
-    logger.info('[WC] No hay cambios para aplicar (name, image, FluentCRM tags).');
+    logger.info('[WC] No hay cambios para aplicar (name, image, FluentCRM, LearnDash).');
     return { productId: product.id, changed: false, dryRun: isDryRun(), diffs: [] };
   }
 
@@ -531,3 +628,4 @@ module.exports = {
   updateWooProductByInput,
   computeSkuCandidates,
 };
+

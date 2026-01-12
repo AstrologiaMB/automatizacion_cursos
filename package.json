@@ -12,9 +12,13 @@
   },
   "dependencies": {
     "axios": "^1.6.0",
+    "chalk": "^4.1.2",
     "dotenv": "^16.4.5",
     "form-data": "^4.0.4",
-    "luxon": "^3.5.0"
+    "ics": "^3.8.1",
+    "luxon": "^3.5.0",
+    "ora": "^5.4.1",
+    "prompts": "^2.4.2"
   },
   "keywords": [
     "zoom",

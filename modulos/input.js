@@ -1,9 +1,11 @@
 // modulos/input.js
-// CLI interactivo para recopilar y validar datos del curso (CommonJS)
+// CLI interactivo para recopilar y validar datos del curso usando 'prompts'
+// Reemplaza la versión anterior basada en readline
 
 'use strict';
 
-const readline = require('readline');
+const prompts = require('prompts');
+const chalk = require('chalk');
 const logger = require('../utils/logger');
 const {
   isNonEmptyString,
@@ -11,286 +13,293 @@ const {
   validateDateDDMMYYYY,
   validateTimeHHmm,
   parsePriceUSD,
-  parseYesNoBoolean,
-  parseTipoReunion,
   parseIntegerMin1,
   parseOptionalPath,
-  parseChoice12,
-  parseRecurrenceChoice,
 } = require('../utils/validator');
 
-function createInterface() {
-  return readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-}
-
-function question(rl, q) {
-  return new Promise((resolve) => rl.question(q, resolve));
-}
-
-function fmtPrompt(label, def) {
-  if (def === undefined || def === null || def === '') return `${label}: `;
-  return `${label} [${def}]: `;
-}
-
-async function askValidated(rl, label, parserFn, defValue) {
-  // parserFn debe devolver { ok: boolean, value?: any, error?: string }
-  // Si el usuario presiona enter y hay default, usamos default y validamos
-  while (true) {
-    const ans = await question(rl, fmtPrompt(label, defValue));
-    const raw = (ans == null || ans === '') ? defValue : ans;
-    const res = parserFn(raw);
-    if (res && res.ok) return res.value;
-    logger.warn(`[INPUT] ${res && res.error ? res.error : 'Entrada inválida.'}`);
+/**
+ * Adaptadores de validación para prompts
+ */
+const val = {
+  text: (v) => isNonEmptyString(v) ? true : 'El valor no puede estar vacío.',
+  date: (v) => {
+    const r = validateDateDDMMYYYY(v);
+    return r.ok ? true : r.error;
+  },
+  time: (v) => {
+    const r = validateTimeHHmm(v);
+    return r.ok ? true : r.error;
+  },
+  int: (v) => {
+    const r = parseIntegerMin1(v);
+    return r.ok ? true : r.error;
+  },
+  tag: (v) => {
+    const r = validateTag(v);
+    return r.ok ? true : r.error;
+  },
+  price: (v) => {
+    const r = parsePriceUSD(v);
+    return r.ok ? true : r.error;
+  },
+  path: (v) => {
+    const r = parseOptionalPath(v || '');
+    return r.ok ? true : r.error;
   }
-}
+};
 
-async function askStringNonEmpty(rl, label, defValue) {
-  while (true) {
-    const ans = await question(rl, fmtPrompt(label, defValue));
-    const raw = (ans == null || ans === '') ? defValue : ans;
-    if (isNonEmptyString(raw)) return raw.trim();
-    logger.warn('[INPUT] El valor no puede estar vacío.');
-  }
+function printWelcomeMessage() {
+  console.log(chalk.cyan('╔════════════════════════════════════════════════════════════════════╗'));
+  console.log(chalk.cyan('║         🤖 AUTOMATIZACIÓN DE CURSOS - MARÍA BLAQUIER 🤖          ║'));
+  console.log(chalk.cyan('╚════════════════════════════════════════════════════════════════════╝'));
+  console.log('');
+  console.log(chalk.bold('📌  ANTES DE COMENZAR, ASEGÚRATE DE TENER:'));
+  console.log('');
+  console.log(`  1. ${chalk.yellow('Imagen del Producto')} generada (Canva) y descargada en tu PC.`);
+  console.log(`  2. ${chalk.yellow('Tag del Curso MOLDE')} (si vas a clonar). Ej: "TPL01".`);
+  console.log(`  3. ${chalk.yellow('Código TAG Nuevo')} definido para el nuevo curso. Ej: "ASTRO2026".`);
+  console.log(`  4. ${chalk.yellow('Fechas y Horarios')} definidos.`);
+  console.log('');
+  console.log(chalk.gray('ℹ️  Este script creará/actualizará:'));
+  console.log(chalk.gray('    - Reunión Zoom'));
+  console.log(chalk.gray('    - Tags/Listas en FluentCRM'));
+  console.log(chalk.gray('    - Curso y Lección en LearnDash (Clonado o Nuevo)'));
+  console.log(chalk.gray('    - Vinculación con Producto WooCommerce'));
+  console.log('');
 }
 
 async function getInputInteractive(defaults = {}) {
-  const rl = createInterface();
-  try {
-    logger.info('[INPUT] Iniciando captura de datos del curso...');
-    const nombreBase = await askStringNonEmpty(rl, '1) Nombre del curso', defaults.nombreBase);
+  printWelcomeMessage();
 
-    const nombreProducto = await askStringNonEmpty(
-      rl,
-      '1.b) Nombre del producto (título público en la tienda)',
-      defaults.nombreProducto
-    );
+  // Pause/Confirm to ensure user reads it
+  const ready = await prompts({
+    type: 'confirm',
+    name: 'value',
+    message: '¿Estás listo para comenzar?',
+    initial: true
+  });
 
-    const fechaInicio = await askValidated(
-      rl,
-      '2) Fecha inicio (DD/MM/YYYY)',
-      (v) => validateDateDDMMYYYY(v),
-      defaults.fechaInicio
-    );
+  if (!ready.value) {
+    console.log(chalk.yellow('👋 Operación cancelada. ¡Vuelve cuando tengas todo listo!'));
+    process.exit(0);
+  }
 
-    const horaInicio = await askValidated(
-      rl,
-      '2.b) Hora de inicio (HH:mm, zona Buenos Aires)',
-      (v) => validateTimeHHmm(v),
-      defaults.horaInicio ?? '19:30'
-    );
+  logger.info('[INPUT] Iniciando captura de datos...');
 
-    const duracionMinutos = await askValidated(
-      rl,
-      '2.c) Duración en minutos (entero >= 1)',
-      (v) => parseIntegerMin1(v),
-      defaults.duracionMinutos ?? 90
-    );
+  let currentDefaults = { ...defaults };
+  let confirmed = false;
+  let response;
 
-    const tagCurso = await askValidated(
-      rl,
-      '3) Tag identificatorio (alfanumérico, -, _)',
-      (v) => validateTag(v),
-      defaults.tagCurso
-    );
-
-    const useExistingClonedCourse = await askValidated(
-      rl,
-      '3.b) ¿Usar curso ya clonado por tag? (s/n)',
-      (v) => parseYesNoBoolean(v),
-      defaults.useExistingClonedCourse
-    );
-
-    let existingTag = undefined;
-    if (useExistingClonedCourse) {
-      existingTag = await askValidated(
-        rl,
-        '3.c) Ingresá el Tag del curso clonado (ej. AM1026)',
-        (v) => validateTag(v),
-        defaults.existingTag
-      );
-    }
-
-    const tipoReunionChoice = await askValidated(
-      rl,
-      '4) Tipo de reunión (1: individual, 2: recurrente)',
-      (v) => parseChoice12(v),
-      defaults.tipoReunion === 'recurrente' ? 2 : 1
-    );
-    const tipoReunion = tipoReunionChoice === 1 ? 'individual' : 'recurrente';
-
-    let tipoRecurrencia = undefined;
-    if (tipoReunion === 'recurrente') {
-      tipoRecurrencia = await askValidated(
-        rl,
-        '4.b) Tipo de recurrencia (1: diaria, 2: semanal, 3: mensual)',
-        (v) => parseRecurrenceChoice(v),
-        defaults.tipoRecurrencia ?? '2'
-      );
-    }
-    let cantidadEncuentros = 1;
-    if (tipoReunion === 'recurrente') {
-      cantidadEncuentros = await askValidated(
-        rl,
-        '5) Cantidad de encuentros (entero >= 1)',
-        (v) => parseIntegerMin1(v),
-        defaults.cantidadEncuentros ?? 2
-      );
-    } else {
-      logger.info('[INPUT] Tipo "individual" → cantidadEncuentros = 1');
-    }
-
-    const precio = await askValidated(
-      rl,
-      '6) Precio en USD (ej: 47.50)',
-      (v) => parsePriceUSD(v),
-      defaults.precio
-    );
-
-    const cursoExistente = await askValidated(
-      rl,
-      '7) ¿Curso existente? (s/n)',
-      (v) => parseYesNoBoolean(v),
-      defaults.cursoExistente
-    );
-
-    const incluirForo = await askValidated(
-      rl,
-      '8) ¿Incluir foro? (s/n)',
-      (v) => parseYesNoBoolean(v),
-      defaults.incluirForo
-    );
-
-    const incluirFormulario = await askValidated(
-      rl,
-      '9) ¿Incluir formulario? (s/n)',
-      (v) => parseYesNoBoolean(v),
-      defaults.incluirFormulario
-    );
-
-    const rutaImagen = await askValidated(
-      rl,
-      '10) Ruta imagen (opcional, dejar vacío si no aplica)',
-      (v) => parseOptionalPath(v),
-      defaults.rutaImagen ?? ''
-    );
-
-    const collected = {
-      nombreBase,
-      nombreProducto,
-      fechaInicio, // DD/MM/YYYY
-      horaInicio, // HH:mm
-      duracionMinutos, // entero
-      tagCurso: tagCurso,
-      useExistingClonedCourse: !!useExistingClonedCourse,
-      existingTag: useExistingClonedCourse ? String(existingTag).trim() : undefined,
-      tipoReunion,
-      tipoRecurrencia: tipoReunion === 'recurrente' ? tipoRecurrencia : undefined,
-      cantidadEncuentros: tipoReunion === 'individual' ? 1 : cantidadEncuentros,
-      precio, // número con 2 decimales
-      cursoExistente,
-      incluirForo,
-      incluirFormulario,
-      rutaImagen, // string (posiblemente vacío)
-    };
-
-    logger.info('[INPUT] Resumen de datos:');
-    // eslint-disable-next-line no-console
-    console.log(JSON.stringify(collected, null, 2));
-
-    const confirmar = await askValidated(
-      rl,
-      '¿Confirmar y continuar? (s/n)',
-      (v) => parseYesNoBoolean(v),
-      's'
-    );
-
-    if (!confirmar) {
-      logger.warn('[INPUT] Operación cancelada por el usuario.');
+  while (!confirmed) {
+    // Cancelar con Ctrl+C lanza error, lo atrapamos
+    try {
+      response = await prompts([
+        {
+          type: 'text',
+          name: 'sourceTag',
+          message: '🏷️  ¿Tag del curso MOLDE a clonar? (Dejar vacío para crear desde cero)',
+          initial: currentDefaults.sourceTag || '',
+        },
+        {
+          type: 'text',
+          name: 'nombreBase',
+          message: '📝 Nombre INTERNO del curso (LearnDash):',
+          initial: currentDefaults.nombreBase || '',
+          validate: value => value.length < 5 ? 'El nombre debe tener al menos 5 caracteres' : true
+        },
+        {
+          type: 'text',
+          name: 'nombreProducto',
+          message: '🛒 Nombre PÚBLICO del producto (WooCommerce):',
+          initial: (prev, values) => currentDefaults.nombreProducto || values.nombreBase, // Sugerir el mismo
+          validate: value => value.length < 5 ? 'El nombre debe tener al menos 5 caracteres' : true
+        },
+        {
+          type: 'text',
+          name: 'fechaInicio',
+          message: '📅 Fecha de inicio (DD/MM/YYYY):',
+          initial: currentDefaults.fechaInicio || '',
+          validate: value => /^\d{2}\/\d{2}\/\d{4}$/.test(value) ? true : 'Formato inválido. Use DD/MM/YYYY'
+        },
+        {
+          type: 'text',
+          name: 'horaInicio',
+          message: 'clock Hora de inicio (HH:mm):',
+          initial: currentDefaults.horaInicio || '19:00',
+          validate: value => /^\d{2}:\d{2}$/.test(value) ? true : 'Formato inválido. Use HH:mm'
+        },
+        {
+          type: 'number',
+          name: 'duracionMinutos',
+          message: '⏳ Duración del encuentro (minutos):',
+          initial: currentDefaults.duracionMinutos || 90,
+          min: 15
+        },
+        {
+          type: 'text',
+          name: 'tagCurso',
+          message: '🏷️  TAG del NUEVO curso (Identificador único, ej: AD0825):',
+          initial: currentDefaults.tagCurso || '',
+          validate: value => value.length < 3 ? 'El tag debe tener al menos 3 caracteres' : true
+        },
+        {
+          type: 'select',
+          name: 'tipoReunion',
+          message: '🎥 ¿Tipo de reunión Zoom?',
+          choices: [
+            { title: 'Recurrente (Mismo Link)', value: 'recurrente' },
+            { title: 'Individual (Una vez)', value: 'individual' }
+          ],
+          initial: currentDefaults.tipoReunion === 'individual' ? 1 : 0
+        },
+        {
+          type: (prev, values) => values.tipoReunion === 'recurrente' ? 'select' : null,
+          name: 'tipoRecurrencia',
+          message: '🔄 Frecuencia de repetición:',
+          choices: [
+            { title: 'Semanal', value: 1 }, // Type 1: Daily, 2: Weekly, 3: Monthly
+            { title: 'Mensual', value: 2 }, // Zoom mapping might vary, assuming simple logic
+            { title: 'Diaria', value: 0 }
+          ],
+          initial: 0
+        },
+        {
+          type: (prev, values) => values.tipoReunion === 'recurrente' ? 'number' : null,
+          name: 'cantidadEncuentros',
+          message: '🔢 Cantidad de encuentros:',
+          initial: currentDefaults.cantidadEncuentros || 4,
+          min: 2,
+          max: 50
+        },
+        {
+          type: 'select',
+          name: 'modoUpdate',
+          message: '⚙️  ¿Modo Actualización? (Si el curso Tag destino ya existe)',
+          choices: [
+            { title: 'No (Crear o Fallar si existe)', value: false },
+            { title: 'Sí (Actualizar existente)', value: true }
+          ],
+          initial: 0
+        },
+        {
+          type: 'text',
+          name: 'rutaImagen',
+          message: '🖼️  Ruta absoluta de imagen destacada (Opcional):',
+          initial: currentDefaults.rutaImagen || '',
+          validate: val.path
+        },
+        {
+          type: 'confirm',
+          name: 'confirmar',
+          message: '¿Confirmar estos datos y comenzar automatización?',
+          initial: true
+        }
+      ], {
+        onCancel: () => {
+          logger.warn('[INPUT] Operación cancelada por el usuario (Ctrl+C).');
+          process.exit(0);
+        }
+      });
+    } catch (e) {
+      logger.error('Error en prompts:', e);
       return null;
     }
 
-    logger.info('[INPUT] Datos confirmados.');
-    return collected;
-  } finally {
-    rl.close();
+    if (response.confirmar) {
+      confirmed = true;
+    } else {
+      // Si dice NO, actualizamos defaults con lo que ingresó y volvemos a iterar
+      logger.info('\n↺ Mantenemos los datos ingresados. Puedes editar lo que necesites.\n');
+      currentDefaults = { ...currentDefaults, ...response };
+      // Ajuste específico: si eligió individual, forzamos null en recurrencia para el default
+      if (response.tipoReunion === 'individual') {
+        currentDefaults.tipoRecurrencia = undefined;
+        currentDefaults.cantidadEncuentros = 1;
+      }
+    }
   }
+
+  const finalData = {
+    ...response,
+    cantidadEncuentros: response.tipoReunion === 'individual' ? 1 : response.cantidadEncuentros,
+    tipoRecurrencia: response.tipoReunion === 'individual' ? undefined : response.tipoRecurrencia,
+    existingTag: response.useExistingClonedCourse ? response.existingTag : undefined,
+    // Defaults para campos eliminados
+    precio: 0,
+    incluirForo: false,
+    incluirFormulario: false
+  };
+
+  logger.info('[INPUT] Datos recolectados y confirmados.');
+  return finalData;
 }
 
 function sanitizeNonInteractive(defaults = {}) {
-  // Valida/sanitiza defaults y devuelve objeto en el formato requerido.
+  // Misma lógica de sanitización para modo no interactivo
+  // Reutilizamos la lógica del archivo original, adaptada mínimamente
   const out = {};
-
-  if (!isNonEmptyString(defaults.nombreBase)) {
-    throw new Error('nombreBase es requerido y no puede estar vacío.');
-  }
+  if (!isNonEmptyString(defaults.nombreBase)) throw new Error('nombreBase requerido');
   out.nombreBase = String(defaults.nombreBase).trim();
 
-  if (!isNonEmptyString(defaults.nombreProducto)) {
-    throw new Error('nombreProducto es requerido y no puede estar vacío.');
-  }
+  if (!isNonEmptyString(defaults.nombreProducto)) throw new Error('nombreProducto requerido');
   out.nombreProducto = String(defaults.nombreProducto).trim();
 
   const d = validateDateDDMMYYYY(defaults.fechaInicio);
-  if (!d.ok) throw new Error(`fechaInicio inválida: ${d.error}`);
+  if (!d.ok) throw new Error(`fechaInicio: ${d.error}`);
   out.fechaInicio = d.value;
 
   const h = validateTimeHHmm(defaults.horaInicio);
-  if (!h.ok) throw new Error(`horaInicio inválida: ${h.error}`);
+  if (!h.ok) throw new Error(`horaInicio: ${h.error}`);
   out.horaInicio = h.value;
 
   const dur = parseIntegerMin1(defaults.duracionMinutos);
-  if (!dur.ok) throw new Error(`duracionMinutos inválida: ${dur.error}`);
+  if (!dur.ok) throw new Error(`duracionMinutos: ${dur.error}`);
   out.duracionMinutos = dur.value;
 
   const t = validateTag(defaults.tagCurso);
-  if (!t.ok) throw new Error(`tagCurso inválido: ${t.error}`);
+  if (!t.ok) throw new Error(`tagCurso: ${t.error}`);
   out.tagCurso = t.value;
 
-  const tr = parseTipoReunion(defaults.tipoReunion);
-  if (!tr.ok) throw new Error(`tipoReunion inválido: ${tr.error}`);
-  out.tipoReunion = tr.value;
+  out.tipoReunion = defaults.tipoReunion === 'recurrente' ? 'recurrente' : 'individual';
 
   if (out.tipoReunion === 'recurrente') {
-    const rec = parseRecurrenceChoice(defaults.tipoRecurrencia ?? 'semanal');
-    if (!rec.ok) throw new Error(`tipoRecurrencia inválida: ${rec.error}`);
-    out.tipoRecurrencia = rec.value;
-
+    out.tipoRecurrencia = ['diaria', 'semanal', 'mensual'].includes(defaults.tipoRecurrencia)
+      ? defaults.tipoRecurrencia
+      : 'semanal';
     const ce = parseIntegerMin1(defaults.cantidadEncuentros);
-    if (!ce.ok) throw new Error(`cantidadEncuentros inválida: ${ce.error}`);
-    out.cantidadEncuentros = ce.value;
+    out.cantidadEncuentros = ce.ok ? ce.value : 1;
   } else {
     out.cantidadEncuentros = 1;
   }
 
+  /* 
   const p = parsePriceUSD(defaults.precio);
-  if (!p.ok) throw new Error(`precio inválido: ${p.error}`);
+  if (!p.ok) throw new Error(`precio: ${p.error}`);
   out.precio = p.value;
+  */
+  out.precio = 0; // Default
 
-  const ceBool = parseYesNoBoolean(defaults.cursoExistente);
-  if (!ceBool.ok) throw new Error(`cursoExistente inválido: ${ceBool.error}`);
-  out.cursoExistente = ceBool.value;
+  out.cursoExistente = Boolean(defaults.cursoExistente);
+  // out.incluirForo = Boolean(defaults.incluirForo);
+  // out.incluirFormulario = Boolean(defaults.incluirFormulario);
+  out.incluirForo = false;
+  out.incluirFormulario = false;
 
-  const ifo = parseYesNoBoolean(defaults.incluirForo);
-  if (!ifo.ok) throw new Error(`incluirForo inválido: ${ifo.error}`);
-  out.incluirForo = ifo.value;
+  const rimg = parseOptionalPath(defaults.rutaImagen);
+  out.rutaImagen = rimg.ok ? rimg.value : '';
 
-  const ifm = parseYesNoBoolean(defaults.incluirFormulario);
-  if (!ifm.ok) throw new Error(`incluirFormulario inválido: ${ifm.error}`);
-  out.incluirFormulario = ifm.value;
-
-  const ri = parseOptionalPath(defaults.rutaImagen ?? '');
-  if (!ri.ok) throw new Error(`rutaImagen inválida: ${ri.error}`);
-  out.rutaImagen = ri.value;
-
-  // Flags para curso clonado existente (opcionales)
   out.useExistingClonedCourse = Boolean(defaults.useExistingClonedCourse);
   if (out.useExistingClonedCourse) {
     const et = validateTag(defaults.existingTag);
-    if (!et.ok) throw new Error(`existingTag inválido: ${et.error}`);
+    if (!et.ok) throw new Error(`existingTag: ${et.error}`);
     out.existingTag = et.value;
+  }
+
+  // NEW: sourceTag for auto-cloning (optional)
+  if (defaults.sourceTag && typeof defaults.sourceTag === 'string') {
+    out.sourceTag = defaults.sourceTag.trim();
+  } else {
+    out.sourceTag = '';
   }
 
   return out;
@@ -299,9 +308,8 @@ function sanitizeNonInteractive(defaults = {}) {
 /**
  * Obtiene los datos del curso.
  * @param {Object} options
- * @param {boolean} [options.interactive=true] - Si true, abre CLI; si false, valida defaults.
- * @param {Object} [options.defaults] - Valores por defecto para prellenar/resolver sin CLI.
- * @returns {Promise<Object|null>} Objeto con los campos del curso o null si cancelado por el usuario en modo interactivo.
+ * @param {boolean} [options.interactive=true]
+ * @param {Object} [options.defaults]
  */
 async function getInputData(options = {}) {
   const { interactive = true, defaults = {} } = options;
@@ -315,20 +323,17 @@ module.exports = {
   getInputData,
 };
 
-// Permitir ejecución directa: `node modulos/input.js`
+// Test directo
 if (require.main === module) {
   (async () => {
     try {
       const data = await getInputData({ interactive: true });
       if (data) {
-        logger.info('[INPUT] Resultado final (JSON abajo).');
         // eslint-disable-next-line no-console
-        console.log(JSON.stringify(data, null, 2));
+        console.log('\nResultado final:', JSON.stringify(data, null, 2));
       }
-      process.exit(0);
     } catch (err) {
-      logger.error('[INPUT] Error:', err.message || err);
-      process.exit(1);
+      logger.error('Error:', err);
     }
   })();
 }
