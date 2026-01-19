@@ -83,10 +83,28 @@ function getFcrmConfig() {
   };
 }
 
+function getWooConfig() {
+  const {
+    WP_BASE_URL,
+    WC_CONSUMER_KEY,
+    WC_CONSUMER_SECRET,
+  } = process.env;
+
+  const url = (WP_BASE_URL || '').replace(/\/+$/, '');
+
+  return {
+    url,
+    consumerKey: WC_CONSUMER_KEY || '',
+    consumerSecret: WC_CONSUMER_SECRET || '',
+    apiBase: '/wp-json/wc/v3',
+  };
+}
+
 module.exports = {
   getZoomConfig,
   getTimezone,
   DEFAULT_TIMEZONE,
   getWpConfig,
   getFcrmConfig,
+  getWooConfig,
 };

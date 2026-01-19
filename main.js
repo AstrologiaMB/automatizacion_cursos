@@ -219,6 +219,17 @@ async function main() {
     mainSpinner.start();
 
     // 7. WOOCOMMERCE
+    // Pre-calculate Date String for Woo & Automation (ACF/Email Body)
+    try {
+      if (input.fechaInicio && input.horaInicio) {
+        const [day, month, year] = input.fechaInicio.split('/').map(Number);
+        const dateObj = new Date(year, month - 1, day);
+        const daysSpan = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+        const monthsSpan = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+        input.startDateTime = `${daysSpan[dateObj.getDay()]} ${day} de ${monthsSpan[month - 1]} las ${input.horaInicio}`;
+      }
+    } catch (ed) { }
+
     const wpCfg2 = getWpConfig();
     const wcKey = process.env.WC_CONSUMER_KEY;
     const wcSecret = process.env.WC_CONSUMER_SECRET;
@@ -268,6 +279,36 @@ async function main() {
           } catch (exSl) {
             logger.error(`[FCRM] SmartLink Error: ${exSl.message}`);
             mainSpinner.warn(chalk.yellow('FluentCRM: Error en SmartLink.'));
+          }
+
+          // 9. AUTOMATION RECYCLING
+          if (input.smartLinkSourceTag) {
+            mainSpinner.start('FluentCRM: Procesando Automatización...');
+            try {
+              const { ensureAutomation } = require('./services/automations');
+
+              // Formatear Fecha (ya calculado arriba en input.startDateTime)
+              const formattedDate = input.startDateTime || '';
+
+              const autoRes = await ensureAutomation({
+                sourceTag: input.smartLinkSourceTag,
+                newTag: input.tagCurso,
+                triggerProductId: courseConfig.integrations.woocommerce.productId,
+                startDateTime: formattedDate,
+                zoomJoinUrl: courseConfig.integrations.zoom.joinUrl || '',
+                includeBirthData: input.incluirFormulario
+              });
+
+              if (autoRes && autoRes.updated) {
+                const msg = process.env.DRY_RUN === 'true' ? ' (DRY-RUN)' : '';
+                mainSpinner.succeed(chalk.green(`FluentCRM: Automatización reciclada${msg} (ID ${autoRes.id})`));
+              } else {
+                mainSpinner.warn(chalk.yellow('FluentCRM: No se actualizó la automatización (ver logs).'));
+              }
+            } catch (eAuto) {
+              logger.error(`[FCRM] Auto Error: ${eAuto.message}`);
+              mainSpinner.warn(chalk.yellow(`FluentCRM: Error en Automatización (${eAuto.message}).`));
+            }
           }
         }
       } catch (eWc) {

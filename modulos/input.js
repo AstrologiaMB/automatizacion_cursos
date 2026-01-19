@@ -185,6 +185,12 @@ async function getInputInteractive(defaults = {}) {
         },
         {
           type: 'text',
+          name: 'timezoneLink',
+          message: '🔗 Link Horario (Conversor timeanddate, opcional, enter para omitir):',
+          initial: ''
+        },
+        {
+          type: 'text',
           name: 'rutaImagen',
           message: '🖼️  Ruta absoluta de imagen destacada (Opcional):',
           initial: currentDefaults.rutaImagen || '',

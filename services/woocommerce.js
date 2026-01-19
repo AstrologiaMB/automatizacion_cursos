@@ -603,6 +603,76 @@ async function updateWooProductByInput({ input, courseId }) {
     diffs.push(ldDiff);
   }
 
+  // ACF Ficha Tecnica Update
+  if (input.startDateTime || input.timezoneLink) {
+    const acfMetas = [];
+    const acfDiffs = [];
+
+    // Find Repeater Indices
+    let dateIndex = -1;
+    let linkIndex = -1;
+
+    // Keys are like: ficha_tecnica_0_pregunta, ficha_tecnica_0_respuesta
+    // We scan existing meta to find the indices based on the "pregunta"
+    product.meta_data.forEach(m => {
+      const match = m.key.match(/^ficha_tecnica_(\d+)_pregunta$/);
+      if (match) {
+        const index = match[1];
+        const val = String(m.value || '').toLowerCase();
+        if (val.includes('cuándo comienza') || val.includes('cuando comienza')) {
+          dateIndex = index;
+        } else if (val.includes('hora de mi ciudad') || val.includes('horario')) {
+          linkIndex = index; // Might match "horario" loosely, be careful
+          if (val.includes('ciudad')) linkIndex = index; // Stronger match
+        }
+      }
+    });
+
+    if (dateIndex !== -1 && input.startDateTime) {
+      // "lunes 28 de abril las 14:30" -> append " (Hora Argentina)"
+      const newDateVal = `${input.startDateTime} (Hora Argentina)`;
+      const keyVal = `ficha_tecnica_${dateIndex}_respuesta`;
+
+      // Find current value for diff (optional)
+      const current = product.meta_data.find(m => m.key === keyVal);
+      const currentVal = current ? current.value : '';
+
+      if (currentVal !== newDateVal) {
+        const patch = { key: keyVal, value: newDateVal };
+        if (current && current.id) patch.id = current.id;
+        acfMetas.push(patch);
+        acfDiffs.push({ scope: 'ACF', field: 'FechaInicio', before: currentVal, after: newDateVal });
+      }
+    }
+
+    if (linkIndex !== -1 && input.timezoneLink) {
+      // Format as HTML Link
+      // If input doesn't start with http, assume it's just a text url?
+      // User prompt says "Link Horario".
+      const linkUrl = input.timezoneLink.trim();
+      if (linkUrl) {
+        const newLinkVal = `<a href="${linkUrl}" target="_blank" rel="noopener noreferrer">Ver hora en mi ciudad</a>`;
+        const keyVal = `ficha_tecnica_${linkIndex}_respuesta`;
+
+        const current = product.meta_data.find(m => m.key === keyVal);
+        const currentVal = current ? current.value : '';
+
+        // Check if link changed (regex compare url or full string)
+        if (currentVal !== newLinkVal) {
+          const patch = { key: keyVal, value: newLinkVal };
+          if (current && current.id) patch.id = current.id;
+          acfMetas.push(patch);
+          acfDiffs.push({ scope: 'ACF', field: 'TimezoneLink', before: currentVal, after: newLinkVal });
+        }
+      }
+    }
+
+    if (acfMetas.length) {
+      meta_data.push(...acfMetas);
+      diffs.push(...acfDiffs);
+    }
+  }
+
   if (meta_data.length) {
     patch.meta_data = meta_data;
   }
