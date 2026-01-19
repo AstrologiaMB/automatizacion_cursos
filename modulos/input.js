@@ -137,6 +137,12 @@ async function getInputInteractive(defaults = {}) {
           min: 15
         },
         {
+          type: 'text',
+          name: 'smartLinkSourceTag',
+          message: '🔗 Tag del curso ANTERIOR (opcional, para reciclar SmartLink):',
+          initial: currentDefaults.smartLinkSourceTag || '',
+        },
+        {
           type: 'select',
           name: 'tipoReunion',
           message: '🎥 ¿Tipo de reunión Zoom?',
@@ -279,8 +285,11 @@ function sanitizeNonInteractive(defaults = {}) {
   // Removed useExistingClonedCourse logic
   out.useExistingClonedCourse = false;
 
-  // sourceTag no longer needed/supported
+  // sourceTag no longer needed/supported (for cloning course)
   out.sourceTag = '';
+
+  // SmartLink Source Tag
+  out.smartLinkSourceTag = defaults.smartLinkSourceTag ? String(defaults.smartLinkSourceTag).trim() : '';
 
   return out;
 }

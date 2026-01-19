@@ -234,6 +234,42 @@ async function main() {
         }
         const mode = wcRes && wcRes.dryRun ? 'DRY-RUN' : 'LIVE';
         mainSpinner.succeed(chalk.green(`WooCommerce: Producto actualizado (${mode}).`));
+
+        // 8. SMARTLINKS (FluentCRM)
+        if (input.smartLinkSourceTag || input.tagCurso) {
+          mainSpinner.text = 'FluentCRM: Procesando SmartLink...'; // reuse spinner
+          try {
+            // Retrieve IDs from config
+            const fcrmData = courseConfig.integrations.fluentcrm || {};
+            const tagIds = fcrmData.tagId ? [fcrmData.tagId] : [];
+            const listIds = fcrmData.listId ? [fcrmData.listId] : [];
+
+            const { ensureSmartLink } = require('./services/smartlinks');
+            // wcRes might be dry run or live, but we need permalink
+            const productUrl = (wcRes && wcRes.permalink) || '';
+
+            const slRes = await ensureSmartLink({
+              sourceTag: input.smartLinkSourceTag, // "Old Tag"
+              newTag: input.tagCurso,             // "New Tag"
+              productUrl: productUrl,
+              addTagIds: tagIds,
+              addListIds: listIds
+            });
+
+            if (slRes) {
+              const slMsg = slRes.wasCreated ? 'CREADO' : 'RECICLADO';
+              logger.info(`[FCRM] SmartLink ${slMsg}: ID ${slRes.id}, Short: ${slRes.shortUrl}`);
+              courseConfig.integrations.fluentcrm.smartLinkId = slRes.id;
+              courseConfig.integrations.fluentcrm.smartLinkUrl = slRes.shortUrl;
+              mainSpinner.succeed(chalk.green(`FluentCRM: SmartLink ${slMsg}.`));
+            } else {
+              mainSpinner.warn(chalk.yellow('FluentCRM: No se pudo procesar SmartLink (ver log).'));
+            }
+          } catch (exSl) {
+            logger.error(`[FCRM] SmartLink Error: ${exSl.message}`);
+            mainSpinner.warn(chalk.yellow('FluentCRM: Error en SmartLink.'));
+          }
+        }
       } catch (eWc) {
         mainSpinner.warn(chalk.yellow(`WooCommerce: Falló actualización (${eWc.message}).`));
       }

@@ -609,7 +609,7 @@ async function updateWooProductByInput({ input, courseId }) {
 
   if (!Object.keys(patch).length) {
     logger.info('[WC] No hay cambios para aplicar (name, image, FluentCRM, LearnDash).');
-    return { productId: product.id, changed: false, dryRun: isDryRun(), diffs: [] };
+    return { productId: product.id, changed: false, dryRun: isDryRun(), diffs: [], permalink: product.permalink };
   }
 
   if (isDryRun()) {
@@ -617,14 +617,14 @@ async function updateWooProductByInput({ input, courseId }) {
     for (const d of diffs) {
       logger.info('[WC] -', d.scope, '=>', d.before, '→', d.after);
     }
-    return { productId: product.id, changed: true, dryRun: true, diffs };
+    return { productId: product.id, changed: true, dryRun: true, diffs, permalink: product.permalink };
   }
 
   // Apply PATCH
   try {
     const resp = await wcClient.put(`/products/${product.id}`, patch);
     logger.info('[WC] Producto actualizado (PATCH) ID=', product.id);
-    return { productId: product.id, changed: true, dryRun: false, diffs };
+    return { productId: product.id, changed: true, dryRun: false, diffs, permalink: resp.data.permalink || product.permalink };
   } catch (e) {
     logger.error('[WC] Error aplicando PATCH al producto:', e.response?.status || e.message);
     throw e;
