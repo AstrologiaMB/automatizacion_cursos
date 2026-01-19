@@ -34,10 +34,16 @@ function buildIsoUTCFromBA(fechaInicio, horaInicio, tzBA = DEFAULT_TIMEZONE) {
   return dtBA.setZone('UTC').toFormat("yyyyLLdd'T'HHmmss"); // ej: 20261211T193000
 }
 
-// Link universal de conversión horaria de TimeAndDate (sin p-codes, Fase 1)
-function buildConverterUrl({ fechaInicio, horaInicio, timezone = DEFAULT_TIMEZONE }) {
+// Códigos de ciudades para timeanddate (según URL ejemplo usuario)
+// p1=136 (London/UTC?), p2=141 (Madrid), p3=51 (BA), p4=232 (Santiago), p5=163 (New York/Miami?), p6=156 (Miami?), p7=155 (Mexico), p8=41 (Bogota), p9=131 (Lima)
+const P_CODES_DEFAULT = [136, 141, 51, 232, 163, 156, 155, 41, 131];
+
+// Link universal de conversión horaria de TimeAndDate (Con p-codes)
+function buildConverterUrl({ fechaInicio, horaInicio, timezone = DEFAULT_TIMEZONE, pCodes = P_CODES_DEFAULT }) {
   const isoUTC = buildIsoUTCFromBA(fechaInicio, horaInicio, timezone);
-  return `https://www.timeanddate.com/worldclock/converter.html?iso=${isoUTC}`;
+  // Construir params p1=...
+  const pParams = pCodes.map((code, idx) => `p${idx + 1}=${code}`).join('&');
+  return `https://www.timeanddate.com/worldclock/converter.html?iso=${isoUTC}&${pParams}`;
 }
 
 // Genera ocurrencias a partir de BA (para individual o recurrente)

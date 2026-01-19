@@ -518,7 +518,7 @@ async function enforceFluentCrmTags({ overrides, newTagCode }) {
   return { metas, diffs };
 }
 
-async function updateWooProductByInput({ input, courseId }) {
+async function updateWooProductByInput({ input, courseId, autoTimezoneLink }) {
   const wcClient = buildWcAxios();
 
   if (courseId) {
@@ -604,7 +604,7 @@ async function updateWooProductByInput({ input, courseId }) {
   }
 
   // ACF Ficha Tecnica Update
-  if (input.startDateTime || input.timezoneLink) {
+  if (input.startDateTime || input.timezoneLink || autoTimezoneLink) {
     const acfMetas = [];
     const acfDiffs = [];
 
@@ -645,11 +645,11 @@ async function updateWooProductByInput({ input, courseId }) {
       }
     }
 
-    if (linkIndex !== -1 && input.timezoneLink) {
+    if (linkIndex !== -1 && (input.timezoneLink || autoTimezoneLink)) {
       // Format as HTML Link
       // If input doesn't start with http, assume it's just a text url?
       // User prompt says "Link Horario".
-      const linkUrl = input.timezoneLink.trim();
+      const linkUrl = (input.timezoneLink || autoTimezoneLink || '').trim();
       if (linkUrl) {
         const newLinkVal = `<a href="${linkUrl}" target="_blank" rel="noopener noreferrer">Ver hora en mi ciudad</a>`;
         const keyVal = `ficha_tecnica_${linkIndex}_respuesta`;

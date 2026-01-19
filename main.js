@@ -236,9 +236,13 @@ async function main() {
     if (Boolean(wpCfg2.baseUrl && wcKey && wcSecret)) {
       mainSpinner.text = 'Actualizando WooCommerce...';
       try {
+        // Get auto-generated link if available
+        const autoLink = (courseConfig.integrations.timeanddate.converterUrls || [])[0];
+
         const wcRes = await updateWooProductByInput({
           input,
-          courseId: courseConfig.integrations.learndash.courseId
+          courseId: courseConfig.integrations.learndash.courseId,
+          autoTimezoneLink: autoLink
         });
         if (wcRes && wcRes.productId) {
           courseConfig.integrations.woocommerce.productId = wcRes.productId;
