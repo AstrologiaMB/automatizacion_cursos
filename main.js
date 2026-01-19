@@ -300,7 +300,8 @@ async function main() {
                 triggerProductId: courseConfig.integrations.woocommerce.productId,
                 startDateTime: formattedDate,
                 zoomJoinUrl: courseConfig.integrations.zoom.joinUrl || '',
-                includeBirthData: input.incluirFormulario
+                includeBirthData: input.incluirFormulario,
+                newListId: courseConfig.integrations.fluentcrm.listId
               });
 
               if (autoRes && autoRes.updated) {

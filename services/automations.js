@@ -20,7 +20,8 @@ async function ensureAutomation({
     triggerProductId,
     startDateTime,
     zoomJoinUrl,
-    includeBirthData = false
+    includeBirthData,
+    newListId: explicitNewListId
 }) {
     const client = getClient();
     const sourceTagClean = String(sourceTag).trim();
@@ -104,8 +105,14 @@ async function ensureAutomation({
         const findList = (name) => lists.find(l => l.title.toLowerCase().trim() === name.toLowerCase().trim());
 
         const lNew = findList(newTagClean);
-        if (lNew) newListId = lNew.id;
-        else logger.warn(`[FCRM] No se encontró la Lista nueva "${newTagClean}". Paso 'Aplicar lista' no se actualizará.`);
+        // Use explicit ID if provided, otherwise search result
+        if (explicitNewListId) {
+            newListId = explicitNewListId;
+        } else if (lNew) {
+            newListId = lNew.id;
+        } else {
+            logger.warn(`[FCRM] No se encontró la Lista nueva "${newTagClean}". Paso 'Aplicar lista' no se actualizará.`);
+        }
 
         const lOld = findList(sourceTagClean);
         if (lOld) oldListId = lOld.id;
