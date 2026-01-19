@@ -151,9 +151,9 @@ async function getInputInteractive(defaults = {}) {
           name: 'tipoRecurrencia',
           message: '🔄 Frecuencia de repetición:',
           choices: [
-            { title: 'Semanal', value: 1 }, // Type 1: Daily, 2: Weekly, 3: Monthly
-            { title: 'Mensual', value: 2 }, // Zoom mapping might vary, assuming simple logic
-            { title: 'Diaria', value: 0 }
+            { title: 'Semanal', value: 'semanal' }, // Type 1: Daily, 2: Weekly, 3: Monthly
+            { title: 'Mensual', value: 'mensual' }, // Zoom mapping might vary, assuming simple logic
+            { title: 'Diaria', value: 'diaria' }
           ],
           initial: 0
         },

@@ -155,6 +155,27 @@ async function main() {
         logger.info(`[LD] Curso encontrado: "${foundCourse.title.rendered}" (ID: ${courseId})`);
         mainSpinner.succeed(chalk.green(`LearnDash: Curso validado (ID ${courseId}).`));
 
+        // Auto-correct Slug if needed
+        const currentSlug = foundCourse.slug;
+        const desiredSlug = String(targetTag).toLowerCase().trim();
+
+        if (currentSlug !== desiredSlug) {
+          mainSpinner.text = `LearnDash: Corrigiendo URL del curso (${currentSlug} -> ${desiredSlug})...`;
+          try {
+            const client = require('./services/learndash').getWpClient();
+            const cfg = getWpConfig();
+            await client.post(`${cfg.ldApiBase}/sfwd-courses/${courseId}`, {
+              slug: desiredSlug
+            });
+            // Update local reference
+            foundCourse.slug = desiredSlug;
+            mainSpinner.succeed(chalk.green(`LearnDash: URL corregida a /${desiredSlug}`));
+          } catch (errSlug) {
+            logger.warn(`[LD] No se pudo corregir el slug: ${errSlug.message}`);
+            mainSpinner.warn(chalk.yellow('LearnDash: No se pudo actualizar la URL (Slug), pero continuamos.'));
+          }
+        }
+
         // Note: We skip createOrUpdateCourse as per "Manual Clone" directive.
         // We assume the manual clone is correct.
 
@@ -166,10 +187,10 @@ async function main() {
         const lessonTitle = `Datos del Encuentro (Zoom) — ${input.nombreBase}`; // Use input name cleanly
 
         const lessonEnsure = await ensureLesson1({
-          courseId: courseEnsure.courseId,
+          courseId: courseId,
           title: lessonTitle,
           contentHtml,
-          courseSlug: courseConfig.meta.slug, // Might be undefined before fetch? Service handles it.
+          courseSlug: foundCourse.slug, // Use confirmed slug
           courseConfig,
           input,
           zoomResult
@@ -181,7 +202,7 @@ async function main() {
         if (String(process.env.USE_LD_PLUGIN || '').toLowerCase() !== 'true') {
           try {
             await ensureLessonAssignedToCourse({
-              courseId: courseEnsure.courseId,
+              courseId: courseId,
               lessonId: lessonEnsure.lessonId,
             });
           } catch (e2) { }

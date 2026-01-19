@@ -565,7 +565,14 @@ async function updateWooProductByInput({ input, courseId }) {
     const currentId = (Array.isArray(currentVal) && currentVal.length) ? currentVal[0] : null;
 
     if (String(currentId) !== String(targetIdNum)) {
-      ldMeta = { key: '_related_course', value: [targetIdNum] };
+      ldMeta = {
+        key: '_related_course',
+        value: [targetIdNum]
+      };
+      // CRITICAL FIX: If meta exists, must provide ID to update it
+      if (currentLd && currentLd.id) {
+        ldMeta.id = currentLd.id;
+      }
       ldDiff = { scope: 'LearnDash', before: String(currentId), after: String(targetIdNum) };
     }
   }

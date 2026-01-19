@@ -8,6 +8,7 @@ Este script automatiza la creación y configuración de cursos en **WordPress (L
 2.  **FluentCRM**: Asegura que existan los TAGS y LISTAS correspondientes.
 3.  **LearnDash**:
     *   **Integración Post-Clonado**: Busca un curso existente por su Tag y le agrega la Lección de Zoom.
+    *   **Corrección de URL**: Si el curso clonado quedó con una URL sucia (ej. `curso-xy-copy`), el script la corrige automáticamente al Tag limpio (ej. `/el0526`).
     *   **Lección Zoom**: Crea/Actualiza la lección con los datos de conexión y archivo `.ics` (Calendario).
 4.  **WooCommerce**: Busca el producto asociado y actualiza la integración con LearnDash y FluentCRM.
 
