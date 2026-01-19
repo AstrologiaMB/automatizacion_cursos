@@ -53,17 +53,19 @@ function printWelcomeMessage() {
   console.log(chalk.cyan('║         🤖 AUTOMATIZACIÓN DE CURSOS - MARÍA BLAQUIER 🤖          ║'));
   console.log(chalk.cyan('╚════════════════════════════════════════════════════════════════════╝'));
   console.log('');
-  console.log(chalk.bold('📌  ANTES DE COMENZAR, ASEGÚRATE DE TENER:'));
+  console.log(chalk.bold('📌  GUÍA RÁPIDA DE REQUISITOS:'));
   console.log('');
-  console.log(`  1. ${chalk.yellow('Imagen del Producto')} generada (Canva) y descargada en tu PC.`);
-  console.log(`  2. ${chalk.yellow('CLONAR MANUALMENTE')} el curso en LearnDash.`);
-  console.log(`  3. ${chalk.yellow('Tag del Curso CLONADO')} (El tag que le pusiste al curso nuevo). Ej: "PP0326_S".`);
-  console.log(`  4. ${chalk.yellow('Fechas y Horarios')} definidos.`);
+  console.log(`  1. ${chalk.yellow('CLONAR MANUALMENTE')} el curso en LearnDash.`);
+  console.log(`  2. ${chalk.yellow('Tag del Curso CLONADO')} (Ej: "PP0526_S").`);
+  console.log(`  3. ${chalk.yellow('Tag del Curso VIEJO')} (Ej: "PP0425_s") -> Para reciclar SmartLinks y Automatizaciones.`);
+  console.log(`  4. ${chalk.yellow('Fechas y Zoom')} (Inicio y Duración) definidos.`);
   console.log('');
-  console.log(chalk.gray('ℹ️  Este script buscará el curso existente y le agregará:'));
-  console.log(chalk.gray('    - Reunión Zoom'));
-  console.log(chalk.gray('    - Tags/Listas en FluentCRM'));
-  console.log(chalk.gray('    - Vinculación con Producto WooCommerce'));
+  console.log(chalk.gray('ℹ️  QUÉ HARÁ ESTE SCRIPT AUTOMÁTICAMENTE:'));
+  console.log(chalk.gray('    ✅ LearnDash: Agrega lección Zoom y corrige URL.'));
+  console.log(chalk.gray('    ✅ WooCommerce: Actualiza producto y lo vincula.'));
+  console.log(chalk.gray('    ✅ SmartLinks: Recicla el link viejo o crea uno nuevo.'));
+  console.log(chalk.gray('    ✅ Automatizaciones: Recicla correo, trigger y listas.'));
+  console.log(chalk.gray('    ⚠️  FluentForms: Avisará para renombrar/borrar historial MANUALMENTE.'));
   console.log('');
 }
 
@@ -190,6 +192,12 @@ async function getInputInteractive(defaults = {}) {
         },
         {
           type: 'confirm',
+          name: 'incluirFormulario',
+          message: '📋 ¿Incluir solicitud de Datos de Nacimiento en el mail? (Si NO, se borrará esa sección del correo)',
+          initial: true
+        },
+        {
+          type: 'confirm',
           name: 'confirmar',
           message: '¿Confirmar estos datos y comenzar automatización?',
           initial: true
@@ -277,7 +285,9 @@ function sanitizeNonInteractive(defaults = {}) {
   out.precio = 0;
   out.cursoExistente = false;
   out.incluirForo = false;
-  out.incluirFormulario = false;
+
+  // Re-enabled for Automation Logic
+  out.incluirFormulario = defaults.incluirFormulario === true;
 
   const rimg = parseOptionalPath(defaults.rutaImagen);
   out.rutaImagen = rimg.ok ? rimg.value : '';
