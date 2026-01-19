@@ -56,14 +56,13 @@ function printWelcomeMessage() {
   console.log(chalk.bold('📌  ANTES DE COMENZAR, ASEGÚRATE DE TENER:'));
   console.log('');
   console.log(`  1. ${chalk.yellow('Imagen del Producto')} generada (Canva) y descargada en tu PC.`);
-  console.log(`  2. ${chalk.yellow('Tag del Curso MOLDE')} (si vas a clonar). Ej: "TPL01".`);
-  console.log(`  3. ${chalk.yellow('Código TAG Nuevo')} definido para el nuevo curso. Ej: "ASTRO2026".`);
+  console.log(`  2. ${chalk.yellow('CLONAR MANUALMENTE')} el curso en LearnDash.`);
+  console.log(`  3. ${chalk.yellow('Tag del Curso CLONADO')} (El tag que le pusiste al curso nuevo). Ej: "PP0326_S".`);
   console.log(`  4. ${chalk.yellow('Fechas y Horarios')} definidos.`);
   console.log('');
-  console.log(chalk.gray('ℹ️  Este script creará/actualizará:'));
+  console.log(chalk.gray('ℹ️  Este script buscará el curso existente y le agregará:'));
   console.log(chalk.gray('    - Reunión Zoom'));
   console.log(chalk.gray('    - Tags/Listas en FluentCRM'));
-  console.log(chalk.gray('    - Curso y Lección en LearnDash (Clonado o Nuevo)'));
   console.log(chalk.gray('    - Vinculación con Producto WooCommerce'));
   console.log('');
 }
@@ -84,7 +83,7 @@ async function getInputInteractive(defaults = {}) {
     process.exit(0);
   }
 
-  logger.info('[INPUT] Iniciando captura de datos...');
+  logger.info('[INPUT] Iniciando captura de datos (Workflow Manual)...');
 
   let currentDefaults = { ...defaults };
   let confirmed = false;
@@ -94,16 +93,18 @@ async function getInputInteractive(defaults = {}) {
     // Cancelar con Ctrl+C lanza error, lo atrapamos
     try {
       response = await prompts([
+        // REMOVED sourceTag prompt
         {
           type: 'text',
-          name: 'sourceTag',
-          message: '🏷️  ¿Tag del curso MOLDE a clonar? (Dejar vacío para crear desde cero)',
-          initial: currentDefaults.sourceTag || '',
+          name: 'tagCursoClonado', // Renamed from tagCurso
+          message: '🏷️  Tag del curso YA CLONADO (Identificador único, ej: PP0326_S):',
+          initial: currentDefaults.tagCursoClonado || '',
+          validate: value => value.length < 3 ? 'El tag debe tener al menos 3 caracteres' : true
         },
         {
           type: 'text',
           name: 'nombreBase',
-          message: '📝 Nombre INTERNO del curso (LearnDash):',
+          message: '📝 Nombre INTERNO del curso (LearnDash) [Para verificar]:',
           initial: currentDefaults.nombreBase || '',
           validate: value => value.length < 5 ? 'El nombre debe tener al menos 5 caracteres' : true
         },
@@ -134,13 +135,6 @@ async function getInputInteractive(defaults = {}) {
           message: '⏳ Duración del encuentro (minutos):',
           initial: currentDefaults.duracionMinutos || 90,
           min: 15
-        },
-        {
-          type: 'text',
-          name: 'tagCurso',
-          message: '🏷️  TAG del NUEVO curso (Identificador único, ej: AD0825):',
-          initial: currentDefaults.tagCurso || '',
-          validate: value => value.length < 3 ? 'El tag debe tener al menos 3 caracteres' : true
         },
         {
           type: 'select',
@@ -221,10 +215,11 @@ async function getInputInteractive(defaults = {}) {
 
   const finalData = {
     ...response,
+    tagCurso: response.tagCursoClonado, // Map for compatibility/common usage
     cantidadEncuentros: response.tipoReunion === 'individual' ? 1 : response.cantidadEncuentros,
     tipoRecurrencia: response.tipoReunion === 'individual' ? undefined : response.tipoRecurrencia,
-    existingTag: response.useExistingClonedCourse ? response.existingTag : undefined,
-    // Defaults para campos eliminados
+    existingTag: undefined, // Removed old logic
+    // Defaults for removed fields
     precio: 0,
     incluirForo: false,
     incluirFormulario: false
@@ -235,8 +230,6 @@ async function getInputInteractive(defaults = {}) {
 }
 
 function sanitizeNonInteractive(defaults = {}) {
-  // Misma lógica de sanitización para modo no interactivo
-  // Reutilizamos la lógica del archivo original, adaptada mínimamente
   const out = {};
   if (!isNonEmptyString(defaults.nombreBase)) throw new Error('nombreBase requerido');
   out.nombreBase = String(defaults.nombreBase).trim();
@@ -256,9 +249,12 @@ function sanitizeNonInteractive(defaults = {}) {
   if (!dur.ok) throw new Error(`duracionMinutos: ${dur.error}`);
   out.duracionMinutos = dur.value;
 
-  const t = validateTag(defaults.tagCurso);
-  if (!t.ok) throw new Error(`tagCurso: ${t.error}`);
-  out.tagCurso = t.value;
+  // Check tagCursoClonado (or fallback to tagCurso for legacy json)
+  const tagRaw = defaults.tagCursoClonado || defaults.tagCurso;
+  const t = validateTag(tagRaw);
+  if (!t.ok) throw new Error(`tagCursoClonado: ${t.error}`);
+  out.tagCursoClonado = t.value;
+  out.tagCurso = t.value; // Map for consistency
 
   out.tipoReunion = defaults.tipoReunion === 'recurrente' ? 'recurrente' : 'individual';
 
@@ -272,35 +268,19 @@ function sanitizeNonInteractive(defaults = {}) {
     out.cantidadEncuentros = 1;
   }
 
-  /* 
-  const p = parsePriceUSD(defaults.precio);
-  if (!p.ok) throw new Error(`precio: ${p.error}`);
-  out.precio = p.value;
-  */
-  out.precio = 0; // Default
-
-  out.cursoExistente = Boolean(defaults.cursoExistente);
-  // out.incluirForo = Boolean(defaults.incluirForo);
-  // out.incluirFormulario = Boolean(defaults.incluirFormulario);
+  out.precio = 0;
+  out.cursoExistente = false;
   out.incluirForo = false;
   out.incluirFormulario = false;
 
   const rimg = parseOptionalPath(defaults.rutaImagen);
   out.rutaImagen = rimg.ok ? rimg.value : '';
 
-  out.useExistingClonedCourse = Boolean(defaults.useExistingClonedCourse);
-  if (out.useExistingClonedCourse) {
-    const et = validateTag(defaults.existingTag);
-    if (!et.ok) throw new Error(`existingTag: ${et.error}`);
-    out.existingTag = et.value;
-  }
+  // Removed useExistingClonedCourse logic
+  out.useExistingClonedCourse = false;
 
-  // NEW: sourceTag for auto-cloning (optional)
-  if (defaults.sourceTag && typeof defaults.sourceTag === 'string') {
-    out.sourceTag = defaults.sourceTag.trim();
-  } else {
-    out.sourceTag = '';
-  }
+  // sourceTag no longer needed/supported
+  out.sourceTag = '';
 
   return out;
 }

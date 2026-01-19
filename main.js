@@ -139,38 +139,26 @@ async function main() {
       try {
         const { createOrUpdateCourse, ensureLesson1, ensureLessonAssignedToCourse, getCourseByTag, buildLesson1Content } = require('./services/learndash');
 
-        // 1. Buscar curso molde (Auto-Cloning)
-        let sourceCourseData = null;
-        if (input.sourceTag) {
-          mainSpinner.text = `LearnDash: Buscando curso MOLDE con tag "${input.sourceTag}"...`;
-          const source = await getCourseByTag({ client: require('./services/learndash').getWpClient(), tag: input.sourceTag });
-          if (source) {
-            sourceCourseData = source;
-            logger.info(`[LD] Curso molde encontrado: "${source.title.rendered}" (ID: ${source.id})`);
-          } else {
-            logger.warn(chalk.yellow(`[LD] No se encontró ningún curso molde con el tag "${input.sourceTag}". Se creará desde cero.`));
-          }
+        // 1. Buscar curso YA EXISTENTE (Manual Clone)
+        const targetTag = input.tagCurso;
+        mainSpinner.text = `LearnDash: Buscando curso CLONADO con tag "${targetTag}"...`;
+
+        const foundCourse = await getCourseByTag({ client: require('./services/learndash').getWpClient(), tag: targetTag });
+
+        if (!foundCourse) {
+          throw new Error(`[LD] NO se encontró ningún curso con el tag "${targetTag}". Por favor clónalo manualmente primero y asegúrate de que el título contenga el tag.`);
         }
 
-        mainSpinner.text = 'LearnDash: Procesando curso...';
+        const courseId = foundCourse.id;
+        courseConfig.integrations.learndash.courseId = courseId;
 
-        // 2. Crear o Actualizar Curso
-        const courseEnsure = await createOrUpdateCourse({
-          client: require('./services/learndash').getWpClient(),
-          title: input.nombreBase, // Internal Name
-          slug: input.tagCurso, // User requested Tag as Slug
-          content: 'Contenido generado automáticamente.', // Fallback content
-          imagePath: input.rutaImagen,
-          existingCourse: null, // We let the service find by slug/title
-          sourceCourseData // PASS THE CLONE DATA
-        });
+        logger.info(`[LD] Curso encontrado: "${foundCourse.title.rendered}" (ID: ${courseId})`);
+        mainSpinner.succeed(chalk.green(`LearnDash: Curso validado (ID ${courseId}).`));
 
-        courseConfig.integrations.learndash.courseId = courseEnsure.courseId;
-        const msgMode = courseEnsure.wasCreated ? 'creado' : 'actualizado';
-        mainSpinner.succeed(chalk.green(`LearnDash: Curso base ${msgMode} (ID ${courseEnsure.courseId}).`));
-        if (sourceCourseData) {
-          logger.info(chalk.cyan(`ℹ️  Curso clonado a partir de: ${sourceCourseData.title.rendered}`));
-        }
+        // Note: We skip createOrUpdateCourse as per "Manual Clone" directive.
+        // We assume the manual clone is correct.
+
+        /* Removed Auto-Cloning Logic */
 
         // 3. Crear Lección Zoom
         mainSpinner.start('LearnDash: Creando lección Zoom...');
