@@ -62,9 +62,10 @@ function printWelcomeMessage() {
   console.log('');
   console.log(chalk.gray('ℹ️  QUÉ HARÁ ESTE SCRIPT AUTOMÁTICAMENTE:'));
   console.log(chalk.gray('    ✅ LearnDash: Agrega lección Zoom y corrige URL.'));
-  console.log(chalk.gray('    ✅ WooCommerce: Actualiza producto y lo vincula.'));
+  console.log(chalk.gray('    ✅ WooCommerce: Actualiza producto, ACF (Fechas/Link) y vinculación.'));
   console.log(chalk.gray('    ✅ SmartLinks: Recicla el link viejo o crea uno nuevo.'));
   console.log(chalk.gray('    ✅ Automatizaciones: Recicla correo, trigger y listas.'));
+  console.log(chalk.gray('    ✨ Link Horario: Se genera Automáticamente (P-Codes) si lo omites.'));
   console.log(chalk.gray('    ⚠️  FluentForms: Avisará para renombrar/borrar historial MANUALMENTE.'));
   console.log('');
 }
