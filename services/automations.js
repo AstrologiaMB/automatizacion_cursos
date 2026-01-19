@@ -97,10 +97,9 @@ async function ensureAutomation({
     let newListId = null;
     let oldListId = null;
     try {
-        const listsRes = await client.get('/wp-json/fluent-crm/v2/lists', { params: { per_page: 50 } }); // Limit? Search?
-        // API supports search? Probed probe-smartlinks.js/services/smartlinks logic uses simple list all?
-        // smartlinks.js uses /lists?per_page=100. Let's do that.
-        const lists = listsRes.data.data || listsRes.data; // normalized
+        const listsRes = await client.get('/wp-json/fluent-crm/v2/lists', { params: { per_page: 50 } });
+        let lists = listsRes.data.data || listsRes.data;
+        if (!Array.isArray(lists)) lists = [];
 
         const findList = (name) => lists.find(l => l.title.toLowerCase().trim() === name.toLowerCase().trim());
 
