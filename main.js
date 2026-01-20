@@ -319,21 +319,25 @@ async function main() {
             }
 
             // 4. FluentForms Recycle
-            mainSpinner.text = 'FluentForms: Procesando Formulario...';
-            try {
-              const formRes = await recycleForm({
-                sourceTag: input.tagCursoAnterior,
-                newTag: input.tagCurso
-              });
-              if (formRes) {
-                const msg = process.env.DRY_RUN === 'true' ? ' (DRY-RUN)' : '';
-                mainSpinner.succeed(chalk.green(`FluentForms: Formulario procesado${msg}.`));
-              } else {
-                mainSpinner.warn(chalk.yellow('FluentForms: No se pudo automatizar. Requiere revisión manual.'));
+            if (input.incluirFormulario) {
+              mainSpinner.text = 'FluentForms: Procesando Formulario...';
+              try {
+                const formRes = await recycleForm({
+                  sourceTag: input.tagCursoAnterior,
+                  newTag: input.tagCurso
+                });
+                if (formRes) {
+                  const msg = process.env.DRY_RUN === 'true' ? ' (DRY-RUN)' : '';
+                  mainSpinner.succeed(chalk.green(`FluentForms: Formulario procesado${msg}.`));
+                } else {
+                  mainSpinner.warn(chalk.yellow('FluentForms: No se pudo automatizar. Requiere revisión manual.'));
+                }
+              } catch (eForm) {
+                logger.error(`[FORMS] Error: ${eForm.message}`);
+                mainSpinner.warn(chalk.yellow(`FluentForms: Error (${eForm.message}).`));
               }
-            } catch (eForm) {
-              logger.error(`[FORMS] Error: ${eForm.message}`);
-              mainSpinner.warn(chalk.yellow(`FluentForms: Error (${eForm.message}).`));
+            } else {
+              mainSpinner.info(chalk.dim('FluentForms: Omitido (No se requieren datos de nacimiento).'));
             }
           }
         }

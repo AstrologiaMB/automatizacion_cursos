@@ -116,10 +116,11 @@ async function ensureSmartLink({
         // If we are recycling, we want to remove the OLD lists/tags to avoid accumulation.
         // safely handle if keys are missing
         if (Array.isArray(candidate.actions.lists)) {
-            removeLists = candidate.actions.lists;
+            // Map objects or IDs to String IDs
+            removeLists = candidate.actions.lists.map(item => (typeof item === 'object' && item !== null) ? String(item.id) : String(item));
         }
         if (Array.isArray(candidate.actions.tags)) {
-            removeTags = candidate.actions.tags;
+            removeTags = candidate.actions.tags.map(item => (typeof item === 'object' && item !== null) ? String(item.id) : String(item));
         }
     }
 

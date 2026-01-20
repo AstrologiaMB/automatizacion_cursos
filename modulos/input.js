@@ -243,7 +243,7 @@ async function getInputInteractive(defaults = {}) {
     // Defaults for removed fields
     precio: 0,
     incluirForo: false,
-    incluirFormulario: false
+    incluirFormulario: response.incluirFormulario
   };
 
   logger.info('[INPUT] Datos recolectados y confirmados.');

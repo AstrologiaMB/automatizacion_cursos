@@ -350,8 +350,23 @@ async function ensureAutomation({
             // Now Save Sequences
             if (fullFunnel.funnel_steps && fullFunnel.funnel_steps.length > 0) {
                 logger.info(`[FCRM] Guardando secuencias (Pasos)...`);
+
+                // DATA PREP FIX: FluentCRM PHP expects JSON strings for 'settings' and 'conditions'
+                // inside saveSequences logic, or at least some versions do. 
+                // Error "json_decode arg 1 must be string, array given" confirms it receives Array/Object.
+                const preparedSteps = fullFunnel.funnel_steps.map(step => {
+                    const s = { ...step };
+                    if (s.settings && typeof s.settings === 'object') {
+                        s.settings = JSON.stringify(s.settings);
+                    }
+                    if (s.conditions && typeof s.conditions === 'object') {
+                        s.conditions = JSON.stringify(s.conditions);
+                    }
+                    return s;
+                });
+
                 // POST /funnels/{id}/sequences expects the array of sequences
-                await client.post(`/wp-json/fluent-crm/v2/funnels/${funnel.id}/sequences`, fullFunnel.funnel_steps);
+                await client.post(`/wp-json/fluent-crm/v2/funnels/${funnel.id}/sequences`, preparedSteps);
             }
 
             logger.info(`[FCRM] Automatización actualizada exitosamente.`);
