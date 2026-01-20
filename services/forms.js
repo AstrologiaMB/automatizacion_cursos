@@ -17,42 +17,81 @@ async function recycleForm({ sourceTag, newTag, formId = 203 }) {
     const client = getFormsClient();
     const fid = Number(formId);
 
-    logger.info(`[FORMS] Intentando reciclar Formulario ID ${fid} usando Bridge...`);
+    // 0. Find Form Candidate if SourceTag is provided (Dynamic Search logic)
+    let candidateId = fid; // Default to provided ID if search fails/empty
 
-    // 1. Calculate New Title Logic (We need to guess or pass it blindly? 
-    // Ideally we fetch current title to replace ID. But fetches might be 403?
-    // Let's assume the Bridge handles replacement logic? No, PHP snippet expects "title".
-    // Strategy: Try to fetch title via Bridge? No, Bridge is simple.
-    // Strategy: We can't know current title without fetching. 
-    // BUT: The native API /forms/{id} is 403.
-    // So we can blindly set a normalized title if we knew it.
-    // "Formulario Inscripción [TAG]"
-    // Or we ask the user in input.js? Too complex.
-    // BEST EFFORT: Construct a generic title or try to use bridge to fetch?
-    // Let's update PHP snippet to support "replace_tag" pattern if we want.
-    // OR: Just set it to "Formulario de Inscripción (TAG)"
+    if (sourceTag) {
+        try {
+            logger.info(`[FORMS] Buscando formulario candidato con tag: "${sourceTag}" y palabra "nacimiento"...`);
+
+            // Mask Auth for logs
+            const authH = client.defaults.headers.Authorization ? 'Basic [REDACTED]' : 'MISSING';
+            logger.info(`[FORMS] DEBUG Headers Auth: ${authH}`);
+            logger.info(`[FORMS] DEBUG: GET /wp-json/fluent-bridge/v1/list-forms?search=${sourceTag}`);
+
+            const searchRes = await client.get('/wp-json/fluent-bridge/v1/list-forms', {
+                params: { search: sourceTag }
+            });
+
+            if (searchRes.data && searchRes.data.success && Array.isArray(searchRes.data.forms)) {
+                const forms = searchRes.data.forms;
+                logger.info(`[FORMS] Encontrados ${forms.length} formularios con "${sourceTag}".`);
+
+                // Filter: Must contain "nacimiento" (insensitive)
+                const target = forms.find(f => f.title.toLowerCase().includes('nacimiento'));
+
+                if (target) {
+                    logger.info(`[FORMS] Candidato Ideal encontrado: ID ${target.id} - "${target.title}"`);
+                    candidateId = target.id;
+                } else {
+                    logger.warn(`[FORMS] Se encontraron formularios con "${sourceTag}" pero ninguno tiene "nacimiento" en el título.`);
+                    // Strict safety: If we found forms but none matched the strict criteria, 
+                    // it is safer NOT to touch the default form (fid).
+                    if (forms.length > 0) {
+                        logger.warn(`[FORMS] ⚠️ Fallback SAFETY: NO SE TOCARÁ NINGÚN FORMULARIO.`);
+                        return false;
+                    }
+                }
+            } else {
+                logger.warn('[FORMS] No se encontraron formularios via Bridge search.');
+            }
+        } catch (e) {
+            logger.warn(`[FORMS] Error buscando formularios: ${e.message}`);
+            if (e.response && e.response.status === 403) {
+                logger.warn(`[FORMS] ⛔ Acceso Denegado (403) al Bridge Search. Verifica permisos.`);
+                // Abort to be safe
+                return false;
+            }
+        }
+    }
+
+    // Use found ID
+    const finalId = Number(candidateId);
+    if (!finalId) {
+        logger.warn('[FORMS] No se determinó un ID de formulario válido. Omitiendo.');
+        return false;
+    }
+
+    logger.info(`[FORMS] Intentando reciclar Formulario ID ${finalId} usando Bridge...`);
+
     const newTitle = `Formulario de Inscripción (${newTag})`;
 
     if (process.env.DRY_RUN === 'true') {
         logger.info(`[FORMS] DRY-RUN: Bridge POST /update-form`);
-        logger.info(`[FORMS] Payload: { form_id: ${fid}, title: "${newTitle}", delete_entries: true }`);
+        logger.info(`[FORMS] Payload: { form_id: ${finalId}, title: "${newTitle}", delete_entries: true }`);
         return true;
     }
 
     try {
         logger.info(`[FORMS] DEBUG: POST /wp-json/fluent-bridge/v1/update-form`);
-        // Mask Auth for logs
-        const authH = client.defaults.headers.Authorization ? 'Basic [REDACTED]' : 'MISSING';
-        logger.info(`[FORMS] DEBUG Headers Auth: ${authH}`);
-
         const res = await client.post('/wp-json/fluent-bridge/v1/update-form', {
-            form_id: fid,
+            form_id: finalId,
             title: newTitle,
             delete_entries: true
         });
 
         if (res.data && res.data.success) {
-            logger.info(`[FORMS] ✅ ÉXITO: Formulario ID ${fid} actualizado.`);
+            logger.info(`[FORMS] ✅ ÉXITO: Formulario ID ${finalId} actualizado.`);
             logger.info(`[FORMS] Título nuevo: "${newTitle}"`);
             logger.info(`[FORMS] Entradas eliminadas: ${res.data.entries_deleted}`);
             return true;
@@ -63,9 +102,9 @@ async function recycleForm({ sourceTag, newTag, formId = 203 }) {
     } catch (e) {
         if (e.response && e.response.status === 404) {
             logger.warn(`[FORMS] ⚠️ Bridge no encontrado (404). El snippet PHP no está instalado.`);
-            logger.warn(`[FORMS] Acción Manual Requerida: Renombrar formulario ID ${fid} y borrar entradas.`);
+            logger.warn(`[FORMS] Acción Manual Requerida: Renombrar formulario ID ${finalId} y borrar entradas.`);
         } else if (e.response && e.response.status === 403) {
-            logger.warn(`[FORMS] ⛔ Acceso Denegado (403) al Bridge. Verifica permisos de usuario.`);
+            logger.warn(`[FORMS] ⛔ Acceso Denegado (403) al Bridge Update.`);
         } else {
             logger.warn(`[FORMS] Error contactando Bridge: ${e.message}`);
         }
