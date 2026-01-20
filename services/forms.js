@@ -40,6 +40,11 @@ async function recycleForm({ sourceTag, newTag, formId = 203 }) {
     }
 
     try {
+        logger.info(`[FORMS] DEBUG: POST /wp-json/fluent-bridge/v1/update-form`);
+        // Mask Auth for logs
+        const authH = client.defaults.headers.Authorization ? 'Basic [REDACTED]' : 'MISSING';
+        logger.info(`[FORMS] DEBUG Headers Auth: ${authH}`);
+
         const res = await client.post('/wp-json/fluent-bridge/v1/update-form', {
             form_id: fid,
             title: newTitle,

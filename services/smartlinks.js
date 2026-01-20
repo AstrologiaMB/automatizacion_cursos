@@ -139,6 +139,7 @@ async function ensureSmartLink({
         if (candidate) {
             // UPDATE
             logger.info(`[FCRM] (PRE-UPDATE) SmartLink ID ${candidate.id}. Payload: ${JSON.stringify(payload)}`);
+            logger.info(`[FCRM] DEBUG Actions: ${JSON.stringify(payload.actions)}`);
 
             if (isDryRun) {
                 logger.info('[FCRM] DRY-RUN: Skipping SmartLink Update.');

@@ -356,6 +356,9 @@ async function ensureAutomation({
                 // Error "json_decode arg 1 must be string, array given" confirms it receives Array/Object.
                 const preparedSteps = fullFunnel.funnel_steps.map(step => {
                     const s = { ...step };
+                    // Debug type BEFORE fix
+                    if (s.settings) logger.info(`[FCRM] Step ${s.id} settings input type: ${typeof s.settings}`);
+
                     if (s.settings && typeof s.settings === 'object') {
                         s.settings = JSON.stringify(s.settings);
                     }
@@ -364,6 +367,9 @@ async function ensureAutomation({
                     }
                     return s;
                 });
+
+                // Request Body Preview
+                logger.info(`[FCRM] DEBUG Sequences Payload (Partial): ${JSON.stringify(preparedSteps).slice(0, 500)}`);
 
                 // POST /funnels/{id}/sequences expects the array of sequences
                 await client.post(`/wp-json/fluent-crm/v2/funnels/${funnel.id}/sequences`, preparedSteps);
