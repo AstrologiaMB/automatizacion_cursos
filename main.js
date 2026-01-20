@@ -18,7 +18,10 @@ const {
 } = require('./services/timeanddate');
 const { ensureCourse, ensureLesson1, buildLesson1Content, ensureLessonAssignedToCourse, ensureExistingCourseByTag, enforceCourseClosed, renameCourseTitle } = require('./services/learndash');
 const { ensureTagFromCode, ensureListFromCode } = require('./services/fluentcrm');
-const { getZoomConfig, DEFAULT_TIMEZONE, getWpConfig, getFcrmConfig } = require('./services/config');
+const { ensureSmartLink } = require('./services/smartlinks');
+const { ensureAutomation } = require('./services/automations');
+const { recycleForm } = require('./services/forms');
+const { getZoomConfig, DEFAULT_TIMEZONE, getWpConfig, getFcrmConfig, getWcConfig, validateConfigs, getWooConfig } = require('./services/config');
 const { updateWooProductByInput } = require('./services/woocommerce');
 
 function hasZoomCreds(cfg) {
@@ -287,7 +290,7 @@ async function main() {
 
           // 9. AUTOMATION RECYCLING
           if (input.smartLinkSourceTag) {
-            mainSpinner.start('FluentCRM: Procesando Automatización...');
+            mainSpinner.text = 'FluentCRM: Procesando Automatización...';
             try {
               const { ensureAutomation } = require('./services/automations');
 
@@ -313,6 +316,24 @@ async function main() {
             } catch (eAuto) {
               logger.error(`[FCRM] Auto Error: ${eAuto.message}`);
               mainSpinner.warn(chalk.yellow(`FluentCRM: Error en Automatización (${eAuto.message}).`));
+            }
+
+            // 4. FluentForms Recycle
+            mainSpinner.text = 'FluentForms: Procesando Formulario...';
+            try {
+              const formRes = await recycleForm({
+                sourceTag: input.tagCursoAnterior,
+                newTag: input.tagCurso
+              });
+              if (formRes) {
+                const msg = process.env.DRY_RUN === 'true' ? ' (DRY-RUN)' : '';
+                mainSpinner.succeed(chalk.green(`FluentForms: Formulario procesado${msg}.`));
+              } else {
+                mainSpinner.warn(chalk.yellow('FluentForms: No se pudo automatizar. Requiere revisión manual.'));
+              }
+            } catch (eForm) {
+              logger.error(`[FORMS] Error: ${eForm.message}`);
+              mainSpinner.warn(chalk.yellow(`FluentForms: Error (${eForm.message}).`));
             }
           }
         }

@@ -15,77 +15,55 @@ const getFormsClient = () => {
  */
 async function recycleForm({ sourceTag, newTag, formId = 203 }) {
     const client = getFormsClient();
-    const fid = String(formId);
+    const fid = Number(formId);
 
-    logger.info(`[FORMS] Intentando reciclar Formulario ID ${fid}...`);
+    logger.info(`[FORMS] Intentando reciclar Formulario ID ${fid} usando Bridge...`);
+
+    // 1. Calculate New Title Logic (We need to guess or pass it blindly? 
+    // Ideally we fetch current title to replace ID. But fetches might be 403?
+    // Let's assume the Bridge handles replacement logic? No, PHP snippet expects "title".
+    // Strategy: Try to fetch title via Bridge? No, Bridge is simple.
+    // Strategy: We can't know current title without fetching. 
+    // BUT: The native API /forms/{id} is 403.
+    // So we can blindly set a normalized title if we knew it.
+    // "Formulario Inscripción [TAG]"
+    // Or we ask the user in input.js? Too complex.
+    // BEST EFFORT: Construct a generic title or try to use bridge to fetch?
+    // Let's update PHP snippet to support "replace_tag" pattern if we want.
+    // OR: Just set it to "Formulario de Inscripción (TAG)"
+    const newTitle = `Formulario de Inscripción (${newTag})`;
+
+    if (process.env.DRY_RUN === 'true') {
+        logger.info(`[FORMS] DRY-RUN: Bridge POST /update-form`);
+        logger.info(`[FORMS] Payload: { form_id: ${fid}, title: "${newTitle}", delete_entries: true }`);
+        return true;
+    }
 
     try {
-        // 1. Rename
-        // FluentForms Update: PUT /wp-json/fluentform/v1/forms/{id}
-        // Payload: { title: "New Title" }
-        // We need to fetch it first to get current title pattern? OR just construct new one?
-        // User example: "Formulario datos nacimiento taller astromapping PAM0425" -> "... PAM0526"
+        const res = await client.post('/wp-json/fluent-bridge/v1/update-form', {
+            form_id: fid,
+            title: newTitle,
+            delete_entries: true
+        });
 
-        let currentTitle = '';
-        try {
-            const res = await client.get(`/wp-json/fluentform/v1/forms/${fid}`);
-            currentTitle = res.data.title;
-            logger.info(`[FORMS] Título actual: "${currentTitle}"`);
-        } catch (e) {
-            if (e.response && e.response.status === 403) {
-                throw new Error('API Acceso Denegado (403). Verifica permisos de FluentForms.');
-            }
-            throw e;
-        }
-
-        // Construct new title
-        // Simple replace sourceTag -> newTag
-        // If sourceTag is NOT in title, maybe just append newTag?
-        // User said: "Formulario ... PAM0425"
-        let newTitle = currentTitle;
-        if (sourceTag && currentTitle.includes(sourceTag)) {
-            newTitle = currentTitle.replace(sourceTag, newTag);
+        if (res.data && res.data.success) {
+            logger.info(`[FORMS] ✅ ÉXITO: Formulario ID ${fid} actualizado.`);
+            logger.info(`[FORMS] Título nuevo: "${newTitle}"`);
+            logger.info(`[FORMS] Entradas eliminadas: ${res.data.entries_deleted}`);
+            return true;
         } else {
-            logger.warn(`[FORMS] El tag anterior "${sourceTag}" no aparece en el título. Se intentará agregar el nuevo tag.`);
-            newTitle = `${currentTitle} ${newTag}`;
+            throw new Error(res.data?.message || 'Error desconocido del Bridge');
         }
-
-        if (newTitle !== currentTitle) {
-            if (process.env.DRY_RUN === 'true') {
-                logger.info(`[FORMS] DRY-RUN: Renombrar Formulario ${fid} a "${newTitle}"`);
-            } else {
-                await client.put(`/wp-json/fluentform/v1/forms/${fid}`, { title: newTitle });
-                logger.info(`[FORMS] Formulario renombrado a: "${newTitle}"`);
-            }
-        } else {
-            logger.info(`[FORMS] El título ya parece actualizado o no requiere cambios.`);
-        }
-
-        // 2. Clear Entries
-        // DELETE /wp-json/fluentform/v1/entries?form_id={id} ??
-        // Usually bulk delete requires a list of IDs.
-        // We might need to fetch entries first.
-        // GET /wp-json/fluentform/v1/entries?form_id={id}&per_page=100
-        // If too many, might need iteration. 
-        // For now, let's TRY to fetch keys.
-
-        // NOTE: If API is 403, we won't reach here.
-
-        // ... Implementation of delete entries would go here ...
-        // But since we expect 403, let's keep it simple:
-
-        logger.warn(`[FORMS] ⚠️ No se implementó el borrado automático de entradas (Requiere validación de API). Por favor hazlo manualmente.`);
-
-        return true;
 
     } catch (e) {
-        logger.warn(
-            `[FORMS] ⚠️ No se pudo reciclar el formulario automáticamente. Posible falta de permisos API.`
-        );
-        logger.warn(`[FORMS] Detalle error: ${e.message}`);
-        logger.warn(
-            `[FORMS] 🔔 ACCIÓN REQUIERIDA: Ve a FluentForms, busca el ID ${fid}, renómbralo a "${newTag}" y borra las entradas viejas.`
-        );
+        if (e.response && e.response.status === 404) {
+            logger.warn(`[FORMS] ⚠️ Bridge no encontrado (404). El snippet PHP no está instalado.`);
+            logger.warn(`[FORMS] Acción Manual Requerida: Renombrar formulario ID ${fid} y borrar entradas.`);
+        } else if (e.response && e.response.status === 403) {
+            logger.warn(`[FORMS] ⛔ Acceso Denegado (403) al Bridge. Verifica permisos de usuario.`);
+        } else {
+            logger.warn(`[FORMS] Error contactando Bridge: ${e.message}`);
+        }
         return false;
     }
 }
