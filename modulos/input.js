@@ -187,7 +187,7 @@ async function getInputInteractive(defaults = {}) {
         {
           type: 'text',
           name: 'timezoneLink',
-          message: '🔗 Link Horario (Conversor timeanddate, opcional, enter para omitir):',
+          message: '🔗 Link Horario (Opcional, Enter = Auto-generar con ciudades estándar):',
           initial: ''
         },
         {
