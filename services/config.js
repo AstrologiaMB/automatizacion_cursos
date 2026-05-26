@@ -13,27 +13,21 @@ try {
 
 const DEFAULT_TIMEZONE = 'America/Argentina/Buenos_Aires';
 
-function getZoomConfig() {
-  const {
-    ZOOM_ACCOUNT_ID,
-    ZOOM_CLIENT_ID,
-    ZOOM_CLIENT_SECRET,
-    ZOOM_HOST_EMAIL,
-    ZOOM_USER_EMAIL,
-  } = process.env;
+function getZoomConfig(accountIndex = '1') {
+  const idx = String(accountIndex) === '2' ? '2' : '1';
+  const prefix = idx === '2' ? 'ZOOM2' : 'ZOOM';
 
   return {
-    accountId: ZOOM_ACCOUNT_ID || '',
-    clientId: ZOOM_CLIENT_ID || '',
-    clientSecret: ZOOM_CLIENT_SECRET || '',
-    hostEmail: ZOOM_HOST_EMAIL || ZOOM_USER_EMAIL || '', // email del usuario host
+    accountId: process.env[`${prefix}_ACCOUNT_ID`] || '',
+    clientId: process.env[`${prefix}_CLIENT_ID`] || '',
+    clientSecret: process.env[`${prefix}_CLIENT_SECRET`] || '',
+    hostEmail: process.env[`${prefix}_HOST_EMAIL`] || process.env[`${prefix}_USER_EMAIL`] || '',
     defaults: {
       timezone: DEFAULT_TIMEZONE,
       waiting_room: true,
       join_before_host: false,
       mute_upon_entry: true,
-      auto_recording: 'none', // 'local' | 'cloud' | 'none'
-      // passcode: se enviará como "password" en el payload
+      auto_recording: 'none',
     },
   };
 }

@@ -29,6 +29,7 @@ function hasZoomCreds(cfg) {
 }
 
 async function main() {
+  let mainSpinner = null;
   try {
     // 1. INPUT
     const nonInteractiveJson = process.env.NON_INTERACTIVE_JSON;
@@ -44,7 +45,7 @@ async function main() {
     }
 
     console.log(''); // Espacio visual
-    const mainSpinner = ora({ text: 'Iniciando automatización...', color: 'cyan' }).start();
+    mainSpinner = ora({ text: 'Iniciando automatización...', color: 'cyan' }).start();
 
     // 2. CONFIG BASE
     mainSpinner.text = 'Construyendo configuración base...';
@@ -100,6 +101,11 @@ async function main() {
       courseConfig.integrations.timeanddate.converterUrls = convUrls;
       courseConfig.integrations.timeanddate.tableHtml = tableHtml;
 
+      // Fechas compactas para el campo WooCommerce (recurrente: "1/6, 8/6, ...")
+      if (occsBA.length > 1) {
+        input.meetingDatesShort = occsBA.map(dt => `${dt.day}/${dt.month}`).join(', ');
+      }
+
       mainSpinner.succeed(chalk.green('TimeAndDate: URLs y tabla generadas.'));
       mainSpinner.start();
     } catch (e) {
@@ -140,7 +146,7 @@ async function main() {
     if (Boolean(wpCfg.baseUrl && ldKey)) {
       mainSpinner.text = 'LearnDash: Creando/Actualizando curso base...';
       try {
-        const { createOrUpdateCourse, ensureLesson1, ensureLessonAssignedToCourse, getCourseByTag, buildLesson1Content } = require('./services/learndash');
+        const { createOrUpdateCourse, ensureLesson1, ensureLessonAssignedToCourse, getCourseByTag, buildLesson1Content, renameCourseTitle } = require('./services/learndash');
 
         // 1. Buscar curso YA EXISTENTE (Manual Clone)
         const targetTag = input.tagCurso;
@@ -157,6 +163,14 @@ async function main() {
 
         logger.info(`[LD] Curso encontrado: "${foundCourse.title.rendered}" (ID: ${courseId})`);
         mainSpinner.succeed(chalk.green(`LearnDash: Curso validado (ID ${courseId}).`));
+
+        // Renombrar título si difiere del nombreBase ingresado
+        const currentTitle = foundCourse.title.rendered.replace(/<[^>]+>/g, '').trim();
+        if (currentTitle !== input.nombreBase.trim()) {
+          mainSpinner.start(`LearnDash: Renombrando curso a "${input.nombreBase}"...`);
+          await renameCourseTitle({ courseId, newTitle: input.nombreBase });
+          mainSpinner.succeed(chalk.green(`LearnDash: Curso renombrado a "${input.nombreBase}".`));
+        }
 
         // Auto-correct Slug if needed
         const currentSlug = foundCourse.slug;
@@ -236,12 +250,11 @@ async function main() {
     const wpCfg2 = getWpConfig();
     const wcKey = process.env.WC_CONSUMER_KEY;
     const wcSecret = process.env.WC_CONSUMER_SECRET;
+    // 7. WOOCOMMERCE
     if (Boolean(wpCfg2.baseUrl && wcKey && wcSecret)) {
       mainSpinner.text = 'Actualizando WooCommerce...';
       try {
-        // Get auto-generated link if available
         const autoLink = (courseConfig.integrations.timeanddate.converterUrls || [])[0];
-
         const wcRes = await updateWooProductByInput({
           input,
           courseId: courseConfig.integrations.learndash.courseId,
@@ -249,103 +262,100 @@ async function main() {
         });
         if (wcRes && wcRes.productId) {
           courseConfig.integrations.woocommerce.productId = wcRes.productId;
+          courseConfig.integrations.woocommerce.permalink = wcRes.permalink || '';
         }
         const mode = wcRes && wcRes.dryRun ? 'DRY-RUN' : 'LIVE';
         mainSpinner.succeed(chalk.green(`WooCommerce: Producto actualizado (${mode}).`));
-
-        // 8. SMARTLINKS (FluentCRM)
-        if (input.smartLinkSourceTag || input.tagCurso) {
-          mainSpinner.text = 'FluentCRM: Procesando SmartLink...'; // reuse spinner
-          try {
-            // Retrieve IDs from config
-            const fcrmData = courseConfig.integrations.fluentcrm || {};
-            const tagIds = fcrmData.tagId ? [fcrmData.tagId] : [];
-            const listIds = fcrmData.listId ? [fcrmData.listId] : [];
-
-            const { ensureSmartLink } = require('./services/smartlinks');
-            // wcRes might be dry run or live, but we need permalink
-            const productUrl = (wcRes && wcRes.permalink) || '';
-
-            const slRes = await ensureSmartLink({
-              sourceTag: input.smartLinkSourceTag, // "Old Tag"
-              newTag: input.tagCurso,             // "New Tag"
-              productUrl: productUrl,
-              addTagIds: tagIds,
-              addListIds: listIds
-            });
-
-            if (slRes) {
-              const slMsg = slRes.wasCreated ? 'CREADO' : 'RECICLADO';
-              logger.info(`[FCRM] SmartLink ${slMsg}: ID ${slRes.id}, Short: ${slRes.shortUrl}`);
-              courseConfig.integrations.fluentcrm.smartLinkId = slRes.id;
-              courseConfig.integrations.fluentcrm.smartLinkUrl = slRes.shortUrl;
-              mainSpinner.succeed(chalk.green(`FluentCRM: SmartLink ${slMsg}.`));
-            } else {
-              mainSpinner.warn(chalk.yellow('FluentCRM: No se pudo procesar SmartLink (ver log).'));
-            }
-          } catch (exSl) {
-            logger.error(`[FCRM] SmartLink Error: ${exSl.message}`);
-            mainSpinner.warn(chalk.yellow('FluentCRM: Error en SmartLink.'));
-          }
-
-          // 9. AUTOMATION RECYCLING
-          if (input.smartLinkSourceTag) {
-            mainSpinner.text = 'FluentCRM: Procesando Automatización...';
-            try {
-              const { ensureAutomation } = require('./services/automations');
-
-              // Formatear Fecha (ya calculado arriba en input.startDateTime)
-              const formattedDate = input.startDateTime || '';
-
-              const autoRes = await ensureAutomation({
-                sourceTag: input.smartLinkSourceTag,
-                newTag: input.tagCurso,
-                triggerProductId: courseConfig.integrations.woocommerce.productId,
-                startDateTime: formattedDate,
-                zoomJoinUrl: courseConfig.integrations.zoom.joinUrl || '',
-                includeBirthData: input.incluirFormulario,
-                newListId: courseConfig.integrations.fluentcrm.listId
-              });
-
-              if (autoRes && autoRes.updated) {
-                const msg = process.env.DRY_RUN === 'true' ? ' (DRY-RUN)' : '';
-                mainSpinner.succeed(chalk.green(`FluentCRM: Automatización reciclada${msg} (ID ${autoRes.id})`));
-              } else {
-                mainSpinner.warn(chalk.yellow('FluentCRM: No se actualizó la automatización (ver logs).'));
-              }
-            } catch (eAuto) {
-              logger.error(`[FCRM] Auto Error: ${eAuto.message}`);
-              mainSpinner.warn(chalk.yellow(`FluentCRM: Error en Automatización (${eAuto.message}).`));
-            }
-
-            // 4. FluentForms Recycle
-            if (input.incluirFormulario) {
-              mainSpinner.text = 'FluentForms: Procesando Formulario...';
-              try {
-                const formRes = await recycleForm({
-                  sourceTag: input.tagCursoAnterior,
-                  newTag: input.tagCurso
-                });
-                if (formRes) {
-                  const msg = process.env.DRY_RUN === 'true' ? ' (DRY-RUN)' : '';
-                  mainSpinner.succeed(chalk.green(`FluentForms: Formulario procesado${msg}.`));
-                } else {
-                  mainSpinner.warn(chalk.yellow('FluentForms: No se pudo automatizar. Requiere revisión manual.'));
-                }
-              } catch (eForm) {
-                logger.error(`[FORMS] Error: ${eForm.message}`);
-                mainSpinner.warn(chalk.yellow(`FluentForms: Error (${eForm.message}).`));
-              }
-            } else {
-              mainSpinner.info(chalk.dim('FluentForms: Omitido (No se requieren datos de nacimiento).'));
-            }
-          }
-        }
       } catch (eWc) {
         mainSpinner.warn(chalk.yellow(`WooCommerce: Falló actualización (${eWc.message}).`));
       }
+      mainSpinner.start();
     } else {
       mainSpinner.info(chalk.dim('WooCommerce: Credenciales no configuradas. Omitiendo.'));
+      mainSpinner.start();
+    }
+
+    // 8. SMARTLINKS — corre independiente de WooCommerce
+    if (input.smartLinkSourceTag || input.tagCurso) {
+      mainSpinner.text = 'FluentCRM: Procesando SmartLink...';
+      try {
+        const fcrmData = courseConfig.integrations.fluentcrm || {};
+        const tagIds = fcrmData.tagId ? [fcrmData.tagId] : [];
+        const listIds = fcrmData.listId ? [fcrmData.listId] : [];
+        const productUrl = courseConfig.integrations.woocommerce.permalink || '';
+
+        const slRes = await ensureSmartLink({
+          sourceTag: input.smartLinkSourceTag,
+          newTag: input.tagCurso,
+          productUrl,
+          addTagIds: tagIds,
+          addListIds: listIds
+        });
+
+        if (slRes) {
+          const slMsg = slRes.wasCreated ? 'CREADO' : 'RECICLADO';
+          logger.info(`[FCRM] SmartLink ${slMsg}: ID ${slRes.id}, Short: ${slRes.shortUrl}`);
+          courseConfig.integrations.fluentcrm.smartLinkId = slRes.id;
+          courseConfig.integrations.fluentcrm.smartLinkUrl = slRes.shortUrl;
+          mainSpinner.succeed(chalk.green(`FluentCRM: SmartLink ${slMsg}.`));
+        } else {
+          mainSpinner.warn(chalk.yellow('FluentCRM: No se pudo procesar SmartLink (ver log).'));
+        }
+      } catch (exSl) {
+        logger.error(`[FCRM] SmartLink Error: ${exSl.message}`);
+        mainSpinner.warn(chalk.yellow('FluentCRM: Error en SmartLink.'));
+      }
+      mainSpinner.start();
+
+      // 9. AUTOMATIZACIÓN — corre independiente de WooCommerce
+      if (input.smartLinkSourceTag) {
+        mainSpinner.text = 'FluentCRM: Procesando Automatización...';
+        try {
+          const autoRes = await ensureAutomation({
+            sourceTag: input.smartLinkSourceTag,
+            newTag: input.tagCurso,
+            triggerProductId: courseConfig.integrations.woocommerce.productId,
+            startDateTime: input.startDateTime || '',
+            zoomJoinUrl: courseConfig.integrations.zoom.joinUrl || '',
+            timezoneLink: (courseConfig.integrations.timeanddate.converterUrls || [])[0] || '',
+            newListId: courseConfig.integrations.fluentcrm.listId
+          });
+
+          if (autoRes && autoRes.updated) {
+            const msg = process.env.DRY_RUN === 'true' ? ' (DRY-RUN)' : '';
+            mainSpinner.succeed(chalk.green(`FluentCRM: Automatización reciclada${msg} (ID ${autoRes.id})`));
+          } else {
+            mainSpinner.warn(chalk.yellow('FluentCRM: No se actualizó la automatización (ver logs).'));
+          }
+        } catch (eAuto) {
+          logger.error(`[FCRM] Auto Error: ${eAuto.message}`);
+          mainSpinner.warn(chalk.yellow(`FluentCRM: Error en Automatización (${eAuto.message}).`));
+        }
+        mainSpinner.start();
+
+        // 10. FLUENTFORMS
+        if (input.incluirFormulario) {
+          mainSpinner.text = 'FluentForms: Procesando Formulario...';
+          try {
+            const formRes = await recycleForm({
+              sourceTag: input.smartLinkSourceTag,
+              newTag: input.tagCurso
+            });
+            if (formRes) {
+              const msg = process.env.DRY_RUN === 'true' ? ' (DRY-RUN)' : '';
+              mainSpinner.succeed(chalk.green(`FluentForms: Formulario procesado${msg}.`));
+            } else {
+              mainSpinner.warn(chalk.yellow('FluentForms: No se pudo automatizar. Requiere revisión manual.'));
+            }
+          } catch (eForm) {
+            logger.error(`[FORMS] Error: ${eForm.message}`);
+            mainSpinner.warn(chalk.yellow(`FluentForms: Error (${eForm.message}).`));
+          }
+        } else {
+          mainSpinner.info(chalk.dim('FluentForms: Omitido (No se requieren datos de nacimiento).'));
+        }
+        mainSpinner.start();
+      }
     }
 
     mainSpinner.stop(); // Detener spinner para mostrar resumen final
@@ -373,7 +383,7 @@ async function main() {
     console.log(chalk.green('✅ Proceso finalizado.'));
 
   } catch (err) {
-    if (typeof mainSpinner !== 'undefined') mainSpinner.stop();
+    if (mainSpinner) mainSpinner.stop();
     logger.error('Error fatal en main:', err);
     process.exit(1);
   }

@@ -107,7 +107,7 @@ async function getInputInteractive(defaults = {}) {
         {
           type: 'text',
           name: 'nombreBase',
-          message: '📝 Nombre INTERNO del curso (LearnDash) [Para verificar]:',
+          message: '📝 Nombre NUEVO del curso (se aplicará en LearnDash y WooCommerce):',
           initial: currentDefaults.nombreBase || '',
           validate: value => value.length < 5 ? 'El nombre debe tener al menos 5 caracteres' : true
         },
@@ -144,6 +144,16 @@ async function getInputInteractive(defaults = {}) {
           name: 'smartLinkSourceTag',
           message: '🔗 Tag del curso ANTERIOR (opcional, para reciclar SmartLink):',
           initial: currentDefaults.smartLinkSourceTag || '',
+        },
+        {
+          type: 'select',
+          name: 'zoomAccountIndex',
+          message: '📹 ¿En qué cuenta de Zoom crear la reunión?',
+          choices: [
+            { title: 'Zoom 1: Info (info@mariablaquier.com)', value: '1' },
+            { title: 'Zoom 2: Cursos (cursos@mariablaquier.com)', value: '2' }
+          ],
+          initial: currentDefaults.zoomAccountIndex === '2' ? 1 : 0
         },
         {
           type: 'select',
@@ -200,7 +210,7 @@ async function getInputInteractive(defaults = {}) {
         {
           type: 'confirm',
           name: 'incluirFormulario',
-          message: '📋 ¿Incluir solicitud de Datos de Nacimiento en el mail? (Si NO, se borrará esa sección del correo)',
+          message: '📋 ¿Este curso tiene formulario de datos de nacimiento para reciclar?',
           initial: true
         },
         {
@@ -307,6 +317,9 @@ function sanitizeNonInteractive(defaults = {}) {
 
   // SmartLink Source Tag
   out.smartLinkSourceTag = defaults.smartLinkSourceTag ? String(defaults.smartLinkSourceTag).trim() : '';
+
+  // Zoom Account Index
+  out.zoomAccountIndex = defaults.zoomAccountIndex ? String(defaults.zoomAccountIndex) : '1';
 
   return out;
 }

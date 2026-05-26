@@ -3,6 +3,7 @@
 const logger = require('../utils/logger');
 const { getFcrmClient } = require('./fluentcrm');
 const { getFcrmConfig } = require('./config');
+const { getWpClient } = require('./learndash');
 
 /**
  * Ensures a SmartLink exists (Recycle or Create).
@@ -146,10 +147,19 @@ async function ensureSmartLink({
                 return { id: candidate.id, wasCreated: false, shortUrl: candidate.short_url, dryRun: true };
             }
 
-            const upRes = await client.put(`${apiPath}/smart-links/${candidate.id}`, payload);
-            const upData = upRes.data.data || upRes.data;
-            logger.info(`[FCRM] SmartLink actualizado: "${upData.title || payload.title}" (ID: ${candidate.id})`);
-            return { id: candidate.id, wasCreated: false, shortUrl: upData.short_url || candidate.short_url };
+            // PUT de FluentCRM falla en LiteSpeed (body siempre null).
+            // Usamos el bridge PHP que llama a FluentCRM directamente via PHP.
+            // Nota: bridge requiere current_user_can('manage_options') -> usar WP App Password.
+            const bridgeRes = await getWpClient().post('/wp-json/mb-bridge/v1/update-smart-link', {
+                id: candidate.id,
+                title: payload.title,
+                target_url: payload.target_url,
+                status: payload.status || 'published',
+                actions: payload.actions,
+            });
+            const bridgeData = bridgeRes.data;
+            logger.info(`[FCRM] SmartLink actualizado via bridge (strategy: ${bridgeData.strategy}): ID ${candidate.id}`);
+            return { id: candidate.id, wasCreated: false, shortUrl: bridgeData.short_url || candidate.short_url };
         } else {
             // CREATE
             logger.info(`[FCRM] (PRE-CREATE) Payload: ${JSON.stringify(payload)}`);

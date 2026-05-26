@@ -1,5 +1,5 @@
 const { getFcrmClient } = require('./fluentcrm');
-const { recycleForm } = require('./forms');
+const { getWpClient } = require('./learndash');
 const logger = require('../utils/logger');
 
 const getClient = () => getFcrmClient();
@@ -20,7 +20,7 @@ async function ensureAutomation({
     triggerProductId,
     startDateTime,
     zoomJoinUrl,
-    includeBirthData,
+    timezoneLink,
     newListId: explicitNewListId
 }) {
     const client = getClient();
@@ -35,22 +35,32 @@ async function ensureAutomation({
         const url = `/wp-json/fluent-crm/v2/funnels`;
         // We need to list and search mentally or use ?search if supported (Funnel API support search?)
         // Probe showed "funnels" key. Let's try searching.
-        const res = await client.get(url, { params: { search: sourceTagClean, per_page: 10 } });
+        const res = await client.get(url, { params: { search: sourceTagClean, per_page: 50 } });
 
+        logger.info(`[FCRM] Funnels response keys: ${JSON.stringify(Object.keys(res.data || {}))}`);
         let items = [];
-        if (res.data && res.data.funnels && Array.isArray(res.data.funnels.data)) {
-            items = res.data.funnels.data;
-        } else if (Array.isArray(res.data)) items = res.data;
+        if (res.data?.funnels?.data && Array.isArray(res.data.funnels.data)) {
+            items = res.data.funnels.data;          // paginado: { funnels: { data: [] } }
+        } else if (Array.isArray(res.data?.funnels)) {
+            items = res.data.funnels;               // plano:    { funnels: [] }
+        } else if (Array.isArray(res.data)) {
+            items = res.data;                       // raíz:     []
+        }
 
+        logger.info(`[FCRM] Funnels encontrados: ${items.length}`);
         // strict-ish match
         funnel = items.find(f => f.title.includes(sourceTagClean));
 
         if (!funnel) {
             logger.warn(`[FCRM] No se encontró Automatización buscando "${sourceTagClean}". Intentando con "${newTagClean}" por si ya existe...`);
-            const res2 = await client.get(url, { params: { search: newTagClean, per_page: 10 } });
+            const res2 = await client.get(url, { params: { search: newTagClean, per_page: 50 } });
             let items2 = [];
-            if (res2.data && res2.data.funnels && Array.isArray(res2.data.funnels.data)) {
+            if (res2.data?.funnels?.data && Array.isArray(res2.data.funnels.data)) {
                 items2 = res2.data.funnels.data;
+            } else if (Array.isArray(res2.data?.funnels)) {
+                items2 = res2.data.funnels;
+            } else if (Array.isArray(res2.data)) {
+                items2 = res2.data;
             }
             funnel = items2.find(f => f.title.includes(newTagClean));
             if (funnel) {
@@ -79,7 +89,8 @@ async function ensureAutomation({
         fullFunnel = d.funnel || d.data || d;
 
         // Normalize keys: API returns 'funnel_sequences' in 'data' usually, or inside funnel object check both
-        const seqs = d.funnel_sequences || fullFunnel.funnel_sequences;
+        const seqs = d.funnel_sequences || fullFunnel.funnel_sequences
+                   || d.sequences || fullFunnel.sequences;
         if (seqs && Array.isArray(seqs)) {
             fullFunnel.funnel_steps = seqs;
         }
@@ -149,36 +160,29 @@ async function ensureAutomation({
     */
 
     // Update Trigger (WooCommerce Purchase)
-    if (fullFunnel.triggers) {
-        fullFunnel.triggers.forEach(t => {
-            if (t.trigger_name === 'woocommerce_purchased_order') {
-                // Update conditions: { product_ids: [ ... ] }
-                if (t.settings && t.settings.conditions) {
-                    const currentIds = t.settings.conditions.product_ids || [];
-                    const newIdStr = String(triggerProductId);
-
-                    // Only update if DIFFERENT
-                    const isSame = currentIds.some(id => String(id) === newIdStr);
-
-                    if (!isSame) {
-                        logger.info(`[FCRM] Actualizando Trigger WooCommerce Product ID a: ${triggerProductId}`);
-                        t.settings.conditions.product_ids = [newIdStr];
-                        // t.settings.conditions.purchase_type = 'any'; // Preserve existing?
-                        hasChanges = true;
-                    } else {
-                        logger.info(`[FCRM] El Trigger ya apunta al Product ID ${triggerProductId}. No se requieren cambios.`);
-                    }
-                }
-            }
-        });
+    // API structure: trigger_name (string at root) + conditions (object at root, e.g. { product_ids: [] })
+    if (triggerProductId && fullFunnel.trigger_name === 'woocommerce_purchased_order') {
+        const cond = fullFunnel.conditions || {};
+        const currentIds = cond.product_ids || [];
+        const newIdStr = String(triggerProductId);
+        const isSame = currentIds.some(id => String(id) === newIdStr);
+        if (!isSame) {
+            logger.info(`[FCRM] Actualizando Trigger WooCommerce Product ID: ${currentIds.join(',')} -> ${newIdStr}`);
+            fullFunnel.conditions = { ...cond, product_ids: [newIdStr] };
+            hasChanges = true;
+        } else {
+            logger.info(`[FCRM] Trigger ya apunta al Product ID ${triggerProductId}. Sin cambios.`);
+        }
+    } else if (triggerProductId) {
+        logger.warn(`[FCRM] Trigger tipo "${fullFunnel.trigger_name}" no es woocommerce_purchased_order. Product ID no actualizado.`);
     }
 
     // Update Email Actions
     const updateEmailBody = (html) => {
         let content = html;
 
-        // 1. Global Tag Replace (PAM0425 -> PAM0526)
-        // Cases: ?curso=pam0425, Title PAM0425
+        // 1. Global Tag Replace (AT0425 -> AT0526)
+        // Covers: ?curso=at0425, links con tag, títulos, etc.
         const regexTag = new RegExp(sourceTagClean, 'gi');
         content = content.replace(regexTag, newTagClean);
 
@@ -189,50 +193,24 @@ async function ensureAutomation({
             content = content.replace(regexZoom, zoomJoinUrl);
         }
 
-        // 3. Date/Time
-        // Pattern: "lunes 28 de abril las 14:30"
-        // Try to match generic Spanish date format: DayName DayNum de MonthName ...
-        // (lunes|martes...) \d{1,2} de \w+ (las \d{2}:\d{2})?
+        // 3. Date/Time in body
+        // Pattern: "martes 2 de junio las 14:30 de Argentina (GMT-3)"
         const regexDate = /(lunes|martes|miércoles|jueves|viernes|sábado|domingo)\s+\d{1,2}\s+de\s+[a-záéíóú]+\s+(las|a\s+las)\s+\d{1,2}:\d{2}(?:\s+de\s+Argentina)?(?:\s*\(GMT[-+]\d\))?/gi;
-
         if (startDateTime) {
             content = content.replace(regexDate, (match) => {
-                logger.info(`[FCRM] Reemplazando fecha encontrada: "${match}" -> "${startDateTime}"`);
+                logger.info(`[FCRM] Reemplazando fecha en cuerpo: "${match}" -> "${startDateTime}"`);
                 return startDateTime;
             });
         }
 
-        // 4. Birth Data Removal
-        if (includeBirthData === false) {
-            // Try to remove the block "Datos de nacimiento" ... buttons ... spacer
-            // This is tricky HTML. 
-            // Header: <h2 ...>Datos de nacimiento</h2>
-            // ... content ...
-            // Buttons: ... class="wp-block-buttons" ...
-            // Spacer: <p></p>
-
-            // Aggressive Regex: From <h2>Datos de nacimiento</h2> UNTIL <h2 (next header)
-            // But we want to keep next header.
-            // Let's try to find specific markers from the sample provided.
-
-            /*
-               <!-- wp:heading -->
-               <h2 class="wp-block-heading">Datos de nacimiento</h2>
-               <!-- /wp:heading -->
-               ...
-               <!-- /wp:buttons -->
-               ...
-               <!-- wp:paragraph -->
-               <p></p>
-               <!-- /wp:paragraph -->
-            */
-
-            const regexBirthBlock = /<!-- wp:heading -->\s*<h2[^>]*>Datos de nacimiento<\/h2>[\s\S]*?<!-- \/wp:buttons -->(\s*<!-- wp:paragraph -->\s*<p><\/p>\s*<!-- \/wp:paragraph -->)*/im;
-
-            if (regexBirthBlock.test(content)) {
-                logger.info(`[FCRM] Eliminando sección 'Datos de nacimiento'`);
-                content = content.replace(regexBirthBlock, '');
-            }
+        // 4. Timezone Link ("Hora de tu ciudad")
+        // Regex: href="https://www.timeanddate.com/..." dentro de links
+        const regexTimezone = /https:\/\/(?:www\.)?timeanddate\.com\/[^"\s<>]+/gi;
+        if (timezoneLink) {
+            content = content.replace(regexTimezone, (match) => {
+                logger.info(`[FCRM] Reemplazando link timezone: "${match}" -> "${timezoneLink}"`);
+                return timezoneLink;
+            });
         }
 
         return content;
@@ -241,6 +219,14 @@ async function ensureAutomation({
     if (fullFunnel.funnel_steps) {
         fullFunnel.funnel_steps.forEach(step => {
             logger.info(`[FCRM] Step ID ${step.id} Action: ${step.action_name}`);
+
+            // Actualizar título del bloque (nombre visible en el editor)
+            if (step.title && typeof step.title === 'string' && step.title.includes(sourceTagClean)) {
+                step.title = step.title.replace(new RegExp(sourceTagClean, 'gi'), newTagClean);
+                hasChanges = true;
+                logger.info(`[FCRM] Título de bloque actualizado: "${step.title}"`);
+            }
+
             if (step.action_name === 'send_custom_email') {
 
                 let targetSubjectObj = step.settings;
@@ -254,11 +240,20 @@ async function ensureAutomation({
                     const oldSub = targetSubjectObj.email_subject;
                     let newSub = oldSub.replace(new RegExp(sourceTagClean, 'gi'), newTagClean);
 
-                    const regexDateSub = /(lunes|martes|miércoles|jueves|viernes|sábado|domingo)\s+\d{1,2}\s+de\s+[a-záéíóú]+/gi;
-                    const datePart = startDateTime ? (startDateTime.split(' las ')[0] || startDateTime) : '';
+                    if (startDateTime) {
+                        // Build subject date string: "martes junio 2" from "martes 2 de junio las 14:30"
+                        // startDateTime format: "martes 2 de junio las 14:30"
+                        const parts = startDateTime.split(' ');
+                        // parts: ["martes", "2", "de", "junio", "las", "14:30"]
+                        const subjectDateStr = parts.length >= 4
+                            ? `${parts[0]} ${parts[3]} ${parts[1]}`  // "martes junio 2"
+                            : parts[0];
 
-                    if (datePart && regexDateSub.test(newSub)) {
-                        newSub = newSub.replace(regexDateSub, datePart);
+                        // Format in subject: "DiaNombre MesNombre DayNum" (e.g. "martes junio 2")
+                        const regexDateSub = /(lunes|martes|miércoles|jueves|viernes|sábado|domingo)\s+[a-záéíóú]+\s+\d{1,2}/gi;
+                        if (regexDateSub.test(newSub)) {
+                            newSub = newSub.replace(regexDateSub, subjectDateStr);
+                        }
                     }
 
                     if (newSub !== oldSub) {
@@ -305,13 +300,7 @@ async function ensureAutomation({
         });
     }
 
-    // 4. Handle Form Recycling (if needed)
-    if (includeBirthData) {
-        // Try to recycle form (fire and forget / warn)
-        await recycleForm({ sourceTag, newTag, formId: 203 }); // Assuming ID 203 or derived
-    }
-
-    // 5. Save Changes
+    // 4. Save Changes
     if (process.env.DRY_RUN === 'true') {
         logger.info(`[FCRM] DRY-RUN: Skipping Automation Save/Update.`);
         logger.info(`[FCRM] Payload Title: ${newTitle}`);
@@ -329,50 +318,32 @@ async function ensureAutomation({
         // 2. Update Sequences via POST /funnels/{id}/sequences
 
         try {
-            // Update Main Properties
-            const mainPayload = {
-                title: newTitle,
-                status: 'published',
-                trigger_name: fullFunnel.trigger_name, // keep same
-                // Update trigger conditions (product id)
-                conditions: fullFunnel.settings?.conditions || (fullFunnel.triggers && fullFunnel.triggers[0]?.settings?.conditions),
-                settings: fullFunnel.settings
-            };
-
-            // Note: trigger structure is complex in PUT. Usually we leave it if not broken.
-            // But we modified the trigger OBJECT in step 125.
-            // If API accepts full trigger object in 'triggers' key? 
-            // The code 'FunnelController.php' uses specific logic.
-            // Let's rely on PUT primarily for Title. Trigger we might need 'change-trigger' if name changed, but here we only changed conditions.
-            // Safe bet: Send title.
-            await client.put(`/wp-json/fluent-crm/v2/funnels/${funnel.id}`, { title: newTitle });
+            try {
+                const putPayload = { title: newTitle };
+                if (fullFunnel.conditions) putPayload.conditions = fullFunnel.conditions;
+                await client.put(`/wp-json/fluent-crm/v2/funnels/${funnel.id}`, putPayload);
+                logger.info(`[FCRM] Funnel actualizado: title="${newTitle}", conditions=${JSON.stringify(fullFunnel.conditions)}`);
+            } catch (ePut) {
+                // Ignore 422 if message says "already has the same status" or similar (idempotency)
+                if (ePut.response && ePut.response.status === 422) {
+                    logger.warn(`[FCRM] Aviso PUT Funnel: ${ePut.response.data?.message || '422 Unprocessable Entity'} (Probablemente sin cambios)`);
+                } else {
+                    throw ePut;
+                }
+            }
 
             // Now Save Sequences
             if (fullFunnel.funnel_steps && fullFunnel.funnel_steps.length > 0) {
                 logger.info(`[FCRM] Guardando secuencias (Pasos)...`);
 
-                // DATA PREP FIX: FluentCRM PHP expects JSON strings for 'settings' and 'conditions'
-                // inside saveSequences logic, or at least some versions do. 
-                // Error "json_decode arg 1 must be string, array given" confirms it receives Array/Object.
-                const preparedSteps = fullFunnel.funnel_steps.map(step => {
-                    const s = { ...step };
-                    // Debug type BEFORE fix
-                    if (s.settings) logger.info(`[FCRM] Step ${s.id} settings input type: ${typeof s.settings}`);
-
-                    if (s.settings && typeof s.settings === 'object') {
-                        s.settings = JSON.stringify(s.settings);
-                    }
-                    if (s.conditions && typeof s.conditions === 'object') {
-                        s.conditions = JSON.stringify(s.conditions);
-                    }
-                    return s;
+                // El endpoint REST /sequences falla en PHP 8.1 (json_decode bug en FunnelHelper).
+                // Usamos el bridge PHP que guarda directamente via modelo/FunnelHelper interno.
+                // Nota: bridge requiere current_user_can('manage_options') -> usar WP App Password.
+                logger.info(`[FCRM] Guardando sequences via bridge PHP...`);
+                await getWpClient().post('/wp-json/mb-bridge/v1/save-sequences', {
+                    funnel_id: funnel.id,
+                    sequences: fullFunnel.funnel_steps,
                 });
-
-                // Request Body Preview
-                logger.info(`[FCRM] DEBUG Sequences Payload (Partial): ${JSON.stringify(preparedSteps).slice(0, 500)}`);
-
-                // POST /funnels/{id}/sequences expects the array of sequences
-                await client.post(`/wp-json/fluent-crm/v2/funnels/${funnel.id}/sequences`, preparedSteps);
             }
 
             logger.info(`[FCRM] Automatización actualizada exitosamente.`);

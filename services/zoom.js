@@ -48,10 +48,11 @@ async function createMeetingIndividual({
   topic,
   fechaInicio,
   horaInicio,
-  duration, // minutos
+  duration,
   timezone,
-  userId, // email o userId Zoom
+  userId,
   settings,
+  accountIndex = '1',
 }) {
   const { start_time, timezone: tz } = buildStartFromInput({
     fechaInicio,
@@ -68,7 +69,7 @@ async function createMeetingIndividual({
     settings: buildSettings(settings),
   };
 
-  const client = await getZoomAxios();
+  const client = await getZoomAxios(accountIndex);
   try {
     const res = await client.post(`/users/${encodeURIComponent(userId)}/meetings`, payload);
     const data = res.data || {};
@@ -94,11 +95,12 @@ async function createMeetingRecurrentDaily({
   topic,
   fechaInicio,
   horaInicio,
-  duration, // minutos
+  duration,
   timezone,
-  count, // cantidadEncuentros
-  userId, // email o userId Zoom
+  count,
+  userId,
   settings,
+  accountIndex = '1',
 }) {
   const { start_time, timezone: tz } = buildStartFromInput({
     fechaInicio,
@@ -120,7 +122,7 @@ async function createMeetingRecurrentDaily({
     settings: buildSettings(settings),
   };
 
-  const client = await getZoomAxios();
+  const client = await getZoomAxios(accountIndex);
   try {
     const res = await client.post(`/users/${encodeURIComponent(userId)}/meetings`, payload);
     const data = res.data || {};
@@ -149,11 +151,12 @@ async function createMeetingRecurrentWeekly({
   topic,
   fechaInicio,
   horaInicio,
-  duration, // minutos
+  duration,
   timezone,
-  count, // cantidadEncuentros
-  userId, // email o userId Zoom
+  count,
+  userId,
   settings,
+  accountIndex = '1',
 }) {
   const { start_time, timezone: tz, weeklyDayZoom } = buildStartFromInput({
     fechaInicio,
@@ -176,7 +179,7 @@ async function createMeetingRecurrentWeekly({
     settings: buildSettings(settings),
   };
 
-  const client = await getZoomAxios();
+  const client = await getZoomAxios(accountIndex);
   try {
     const res = await client.post(`/users/${encodeURIComponent(userId)}/meetings`, payload);
     const data = res.data || {};
@@ -204,11 +207,12 @@ async function createMeetingRecurrentMonthly({
   topic,
   fechaInicio,
   horaInicio,
-  duration, // minutos
+  duration,
   timezone,
-  count, // cantidadEncuentros
-  userId, // email o userId Zoom
+  count,
+  userId,
   settings,
+  accountIndex = '1',
 }) {
   const { start_time, timezone: tz, dayOfMonth } = buildStartFromInput({
     fechaInicio,
@@ -231,7 +235,7 @@ async function createMeetingRecurrentMonthly({
     settings: buildSettings(settings),
   };
 
-  const client = await getZoomAxios();
+  const client = await getZoomAxios(accountIndex);
   try {
     const res = await client.post(`/users/${encodeURIComponent(userId)}/meetings`, payload);
     const data = res.data || {};
@@ -256,11 +260,14 @@ async function createMeetingRecurrentMonthly({
  * y tipoRecurrencia ('diaria' | 'semanal' | 'mensual')
  */
 async function createMeetingFromInput(input) {
-  const cfg = getZoomConfig();
+  const accountIndex = String(input.zoomAccountIndex || '1');
+  const cfg = getZoomConfig(accountIndex);
   const userId = cfg.hostEmail;
   if (!userId) {
-    throw new Error('Falta ZOOM_HOST_EMAIL en .env para crear reuniones (usuario host).');
+    throw new Error(`Falta ZOOM${accountIndex === '2' ? '2' : ''}_HOST_EMAIL en .env para crear reuniones.`);
   }
+
+  logger.info(`[ZOOM] Usando cuenta ${accountIndex} (${userId})`);
 
   const topic = input.nombreBase || input.nombreProducto || input.tagCurso || 'Curso';
   const timezone = cfg.defaults?.timezone || DEFAULT_TIMEZONE;
@@ -272,47 +279,14 @@ async function createMeetingFromInput(input) {
     const count = input.cantidadEncuentros;
     const kind = (input.tipoRecurrencia || 'semanal').toLowerCase();
     if (kind === 'diaria') {
-      return createMeetingRecurrentDaily({
-        topic,
-        fechaInicio,
-        horaInicio,
-        duration,
-        timezone,
-        count,
-        userId,
-      });
+      return createMeetingRecurrentDaily({ topic, fechaInicio, horaInicio, duration, timezone, count, userId, accountIndex });
     }
     if (kind === 'mensual') {
-      return createMeetingRecurrentMonthly({
-        topic,
-        fechaInicio,
-        horaInicio,
-        duration,
-        timezone,
-        count,
-        userId,
-      });
+      return createMeetingRecurrentMonthly({ topic, fechaInicio, horaInicio, duration, timezone, count, userId, accountIndex });
     }
-    // default semanal
-    return createMeetingRecurrentWeekly({
-      topic,
-      fechaInicio,
-      horaInicio,
-      duration,
-      timezone,
-      count,
-      userId,
-    });
+    return createMeetingRecurrentWeekly({ topic, fechaInicio, horaInicio, duration, timezone, count, userId, accountIndex });
   }
-  // individual
-  return createMeetingIndividual({
-    topic,
-    fechaInicio,
-    horaInicio,
-    duration,
-    timezone,
-    userId,
-  });
+  return createMeetingIndividual({ topic, fechaInicio, horaInicio, duration, timezone, userId, accountIndex });
 }
 
 module.exports = {

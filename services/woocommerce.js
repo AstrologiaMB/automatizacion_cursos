@@ -12,7 +12,7 @@
  *     * Purchase/Add tags: ensure 'p$' and new tagCurso; remove only old tagCurso if present; keep others intact
  *     * Refund/Remove tags: ensure new tagCurso; remove old tagCurso if present; keep others intact
  * - Preserve slug, price, descriptions, categories, and any other meta/taxonomies
- * - Dry-run supported via env DRY_RUN_WC=true
+ * - Dry-run supported via env DRY_RUN=true
  */
 
 const axios = require('axios');
@@ -66,9 +66,9 @@ function buildWcAxios() {
 function computeSkuCandidates(tagCurso) {
   const t = String(tagCurso || '').trim();
   if (!t || t.length < 2) return [];
-  const prefixUpper = t.slice(0, 2).toUpperCase();
-  const prefixLower = t.slice(0, 2).toLowerCase();
-  return [`${prefixUpper}zoom`, `${prefixLower}zoom`];
+  const match = t.match(/^([A-Za-z]+)/);
+  const prefix = match ? match[1] : t.slice(0, 2);
+  return [`${prefix.toUpperCase()}zoom`, `${prefix.toLowerCase()}zoom`];
 }
 
 async function getProductBySkuCandidates({ client, candidates }) {
@@ -452,7 +452,7 @@ async function maybeBuildImagePatch({ product, rutaImagen }) {
 }
 
 function isDryRun() {
-  return String(process.env.DRY_RUN_WC || 'true').toLowerCase() === 'true';
+  return String(process.env.DRY_RUN || 'false').toLowerCase() === 'true';
 }
 
 async function enforceFluentCrmTags({ overrides, newTagCode }) {
@@ -614,23 +614,33 @@ async function updateWooProductByInput({ input, courseId, autoTimezoneLink }) {
 
     // Keys are like: ficha_tecnica_0_pregunta, ficha_tecnica_0_respuesta
     // We scan existing meta to find the indices based on the "pregunta"
-    product.meta_data.forEach(m => {
+    const fichaKeys = product.meta_data.filter(m => /^ficha_tecnica_\d+_pregunta$/.test(m.key));
+    if (fichaKeys.length === 0) {
+      logger.warn(`[WC] ACF: No se encontraron campos "ficha_tecnica_N_pregunta" en el producto. Las fechas/links NO se actualizarán.`);
+    } else {
+      logger.info(`[WC] ACF: Campos ficha_tecnica encontrados: ${fichaKeys.map(m => `${m.key}="${m.value}"`).join(', ')}`);
+    }
+    fichaKeys.forEach(m => {
       const match = m.key.match(/^ficha_tecnica_(\d+)_pregunta$/);
       if (match) {
         const index = match[1];
-        const val = String(m.value || '').toLowerCase();
-        if (val.includes('cuándo comienza') || val.includes('cuando comienza')) {
+        const val = String(m.value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        if (val.includes('cuando') || val.includes('inicio') || val.includes('fecha')) {
           dateIndex = index;
-        } else if (val.includes('hora de mi ciudad') || val.includes('horario')) {
-          linkIndex = index; // Might match "horario" loosely, be careful
-          if (val.includes('ciudad')) linkIndex = index; // Stronger match
+        } else if (val.includes('ciudad') || val.includes('horario') || val.includes('hora')) {
+          linkIndex = index;
         }
       }
     });
 
-    if (dateIndex !== -1 && input.startDateTime) {
-      // "lunes 28 de abril las 14:30" -> append " (Hora Argentina)"
-      const newDateVal = `${input.startDateTime} (Hora Argentina)`;
+    if (dateIndex === -1 && input.startDateTime) {
+      logger.warn(`[WC] ACF: No se encontró campo de fecha ("Cuándo comienza" o similar). La fecha NO se actualizará en ficha técnica.`);
+    }
+
+    if (dateIndex !== -1 && (input.meetingDatesShort || input.startDateTime)) {
+      const newDateVal = input.meetingDatesShort
+        ? `${input.meetingDatesShort} las ${input.horaInicio} (Hora Argentina)`
+        : `${input.startDateTime} (Hora Argentina)`;
       const keyVal = `ficha_tecnica_${dateIndex}_respuesta`;
 
       // Find current value for diff (optional)

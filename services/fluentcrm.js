@@ -165,9 +165,145 @@ async function ensureListFromCode({ code }) {
   });
 }
 
+// ─────────────────────────────────────────────
+// Funciones de administración post-curso
+// ─────────────────────────────────────────────
+
+/** Busca un tag por código. Devuelve { id, title } o null (no crea). */
+async function findTagByCode({ code }) {
+  const client = getFcrmClient();
+  const found = await findExistingByTitleOrSlug({
+    client,
+    path: '/tags',
+    title: String(code).trim(),
+    slug: normalizeSlug(String(code).trim()),
+  });
+  return found ? { id: found.id, title: found.title } : null;
+}
+
+/** Busca una lista por código. Devuelve { id, title } o null (no crea). */
+async function findListByCode({ code }) {
+  const client = getFcrmClient();
+  const found = await findExistingByTitleOrSlug({
+    client,
+    path: '/lists',
+    title: String(code).trim(),
+    slug: normalizeSlug(String(code).trim()),
+  });
+  return found ? { id: found.id, title: found.title } : null;
+}
+
+/** Devuelve los IDs de contactos con un tag dado via bridge PHP (Eloquent directo).
+ *  La API REST de FluentCRM no filtra por tag_id correctamente en este servidor. */
+async function getContactIdsByTag({ tagId }) {
+  const wpClient = require('./learndash').getWpClient();
+  const resp = await wpClient.post('/wp-json/mb-bridge/v1/contacts-by-tag', { tag_id: tagId });
+  const ids = resp.data?.ids;
+  if (!Array.isArray(ids)) throw new Error('[FCRM] Respuesta inesperada del bridge contacts-by-tag');
+  logger.info(`[FCRM] Contactos con tag ${tagId}: ${ids.length}`);
+  return { ids, total: resp.data.total ?? ids.length };
+}
+
+/** Cambia el tag de curso por el tag alumni via bridge PHP, en lotes de 50.
+ *  Retorna { updated, failed }. */
+async function swapTagOnContacts({ contactIds, removeTagId, addTagId }) {
+  const wpClient = require('./learndash').getWpClient();
+  const batchSize = 50;
+  let totalUpdated = 0;
+  let totalFailed = 0;
+
+  for (let i = 0; i < contactIds.length; i += batchSize) {
+    const batch = contactIds.slice(i, i + batchSize);
+    const batchNum = Math.floor(i / batchSize) + 1;
+    try {
+      const res = await wpClient.post('/wp-json/mb-bridge/v1/swap-contact-tags', {
+        contact_ids: batch,
+        remove_tag_id: removeTagId,
+        add_tag_id: addTagId,
+      });
+      const updated = res.data?.updated ?? 0;
+      const failed = batch.length - updated;
+      totalUpdated += updated;
+      totalFailed += failed;
+      if (failed > 0) {
+        logger.warn(`[FCRM] Lote ${batchNum}: ${updated}/${batch.length} actualizados (${failed} fallidos)`);
+      } else {
+        logger.info(`[FCRM] Lote ${batchNum}: ${updated} contactos actualizados`);
+      }
+    } catch (e) {
+      totalFailed += batch.length;
+      logger.warn(`[FCRM] Error en lote ${batchNum}: ${e.message}`);
+    }
+  }
+
+  logger.info(`[FCRM] Swap total: ${totalUpdated} actualizados, ${totalFailed} fallidos`);
+  return { updated: totalUpdated, failed: totalFailed };
+}
+
+/** Elimina una lista por ID. */
+async function deleteList({ listId }) {
+  const client = getFcrmClient();
+  await client.delete(`/wp-json/fluent-crm/v2/lists/${listId}`);
+  logger.info(`[FCRM] Lista ${listId} eliminada.`);
+}
+
+/** Elimina un tag por ID. */
+async function deleteTag({ tagId }) {
+  const client = getFcrmClient();
+  await client.delete(`/wp-json/fluent-crm/v2/tags/${tagId}`);
+  logger.info(`[FCRM] Tag ${tagId} eliminado.`);
+}
+
+/** Crea una campaña en FluentCRM. Devuelve { id } o null. */
+async function createCampaign({ payload }) {
+  const client = getFcrmClient();
+  try {
+    const resp = await client.post('/wp-json/fluent-crm/v2/campaigns', payload);
+    const d = resp.data;
+    const campaign = d?.campaign || d?.data || d;
+    logger.info(`[FCRM] Campaña creada: ID ${campaign.id}`);
+    return { id: campaign.id };
+  } catch (e) {
+    logger.error(`[FCRM] Error creando campaña: ${e.response ? JSON.stringify(e.response.data) : e.message}`);
+    throw e;
+  }
+}
+
+/** Envía una campaña (pasa de borrador a enviada). */
+async function sendCampaign({ campaignId }) {
+  const client = getFcrmClient();
+  // Intentar endpoint /send primero
+  try {
+    await client.post(`/wp-json/fluent-crm/v2/campaigns/${campaignId}/send`);
+    logger.info(`[FCRM] Campaña ${campaignId} enviada (endpoint /send).`);
+    return;
+  } catch (e) {
+    logger.warn(`[FCRM] Endpoint /send falló (${e.response?.status}), intentando cambio de status...`);
+  }
+  // Fallback: actualizar status a scheduled con envío inmediato
+  try {
+    await client.put(`/wp-json/fluent-crm/v2/campaigns/${campaignId}`, {
+      status: 'scheduled',
+      scheduled_at: null,
+    });
+    logger.info(`[FCRM] Campaña ${campaignId} programada para envío inmediato.`);
+  } catch (e2) {
+    logger.error(`[FCRM] Error enviando campaña: ${e2.response ? JSON.stringify(e2.response.data) : e2.message}`);
+    throw e2;
+  }
+}
+
 module.exports = {
   getFcrmClient,
   ensureTagFromCode,
   ensureListFromCode,
   normalizeSlug,
+  findTagByCode,
+  findListByCode,
+  getContactIdsByTag,
+  swapTagOnContacts,
+  deleteList,
+  deleteTag,
+  createCampaign,
+  sendCampaign,
 };
